@@ -1,0 +1,124 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://sister-game.local/designs/pipeline-state.schema.json",
+  "title": "SisterGame Pipeline State",
+  "description": "Wave 5 Phase 7 拡張。Effective Harnesses 二相構造に対応する pipeline-state.json のスキーマ。phase 遷移、feature 進捗、検証可能要件 (verifiableRequirements) を一元管理する。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "phase",
+    "completedFeatures",
+    "pendingFeatures"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "本 schema へのローカル参照"
+    },
+    "phase": {
+      "type": "string",
+      "enum": [
+        "idle",
+        "design",
+        "spec",
+        "implement",
+        "test",
+        "review",
+        "blocked"
+      ],
+      "description": "パイプライン現フェーズ。idle = 待機。spec/design/implement/test/review = 二相運用中"
+    },
+    "currentSection": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "description": "GDD 内のセクション番号 (例: section-1)。"
+    },
+    "totalSections": {
+      "type": ["integer", "null"],
+      "minimum": 1
+    },
+    "currentBranch": {
+      "type": ["string", "null"],
+      "description": "現在の git ブランチ。phase-boundary-commit hook が更新する"
+    },
+    "completedFeatures": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "完了済の feature 名一覧 (feature-db.py の status=complete と同期)"
+    },
+    "pendingFeatures": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "未着手の feature 名"
+    },
+    "skippedFeatures": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "failedAttempts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "description": "feature 名 → 連続失敗回数。3 回で blocked phase に遷移"
+    },
+    "verifiableRequirements": {
+      "type": "array",
+      "description": "Phase 7 拡張: 二相運用で coding-agent に渡す検証可能要件リスト。各要件は test ファイルで Pass 確認できることを期待する",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "description", "status"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Z]{2,8}-[0-9]{1,4}$",
+            "description": "要件 ID (例: PLM-001 = PlayerMovement-001)"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 10,
+            "description": "1 文で表現された検証可能要件 (例: ジャンプ中に空中ダッシュ入力が来た場合、追加速度を加算する)"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "in_progress", "passed", "failed", "skipped"]
+          },
+          "feature": {
+            "type": "string",
+            "description": "対応する feature-db のエントリ名"
+          },
+          "testFile": {
+            "type": "string",
+            "description": "Edit Mode/Play Mode テストファイルへの相対パス"
+          },
+          "specSource": {
+            "type": "string",
+            "description": "Spec 文書 (designs/specs/{system}/spec.md) の該当セクションへのアンカー"
+          },
+          "lastVerifiedAt": {
+            "type": ["string", "null"],
+            "format": "date-time"
+          }
+        }
+      }
+    },
+    "lastAction": {
+      "type": ["string", "null"],
+      "description": "直近のアクション説明 (例: \"feature PlayerJump completed by coding-agent\")"
+    },
+    "lastUpdated": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "awaitingHumanReview": {
+      "type": "boolean",
+      "default": false,
+      "description": "Phase 23 SDD 用。design.md/spec.md 完成後の人間レビュー gate フラグ"
+    },
+    "notes": {
+      "type": "string"
+    }
+  }
+}

@@ -1,0 +1,150 @@
+{
+  "$schema": "./security-patterns.schema.json",
+  "version": 1,
+  "description": "PR/コメント中の prompt injection 攻撃検出用パターン。tools/pr-validate.py が読み込む source of truth。",
+  "updated": "2026-04-24",
+
+  "prompt_injection_patterns": [
+    {
+      "id": "PI-IGNORE-01",
+      "severity": "critical",
+      "pattern": "(?i)ignore (all )?(previous|prior|above) (instructions|directives|rules)",
+      "description": "『以前の指示を無視せよ』型の古典的 prompt injection",
+      "action": "block"
+    },
+    {
+      "id": "PI-IGNORE-02",
+      "severity": "critical",
+      "pattern": "(?i)disregard (all )?(previous|prior|above)",
+      "description": "『無視せよ』バリエーション",
+      "action": "block"
+    },
+    {
+      "id": "PI-FORGET-01",
+      "severity": "critical",
+      "pattern": "(?i)forget (all )?(your|previous|prior) (instructions|context|training)",
+      "description": "『指示を忘れろ』型",
+      "action": "block"
+    },
+    {
+      "id": "PI-SYSTEM-01",
+      "severity": "critical",
+      "pattern": "(?i)(system|admin|root)[: ]+(prompt|message|instruction)[: ]",
+      "description": "システム権限装い型",
+      "action": "block"
+    },
+    {
+      "id": "PI-NEWROLE-01",
+      "severity": "high",
+      "pattern": "(?i)you are now (a|an) ",
+      "description": "役割再定義型（you are now a helpful/evil/...）",
+      "action": "warn"
+    },
+    {
+      "id": "PI-NEWINST-01",
+      "severity": "high",
+      "pattern": "(?i)new instructions?:",
+      "description": "『新しい指示』宣言型",
+      "action": "warn"
+    },
+    {
+      "id": "PI-TOKEN-01",
+      "severity": "critical",
+      "pattern": "<\\|im_start\\|>|<\\|im_end\\|>|<\\|system\\|>",
+      "description": "チャットテンプレート制御トークン混入",
+      "action": "block"
+    },
+    {
+      "id": "PI-OVERRIDE-01",
+      "severity": "critical",
+      "pattern": "(?i)override (your )?(safety|guidelines|rules|filters)",
+      "description": "セーフガード無効化型",
+      "action": "block"
+    },
+    {
+      "id": "PI-JAILBREAK-01",
+      "severity": "critical",
+      "pattern": "(?i)(DAN|jailbreak|developer mode|unrestricted mode)",
+      "description": "既知 jailbreak キーワード",
+      "action": "block"
+    },
+    {
+      "id": "PI-EXFIL-01",
+      "severity": "high",
+      "pattern": "(?i)(print|output|echo|reveal|show) (your |the )?(system prompt|instructions|api key|secret|credentials)",
+      "description": "機密情報 exfil 誘導",
+      "action": "block"
+    },
+    {
+      "id": "PI-COMMAND-01",
+      "severity": "high",
+      "pattern": "(?i)execute (bash|shell|code): ",
+      "description": "コマンド実行誘導",
+      "action": "warn"
+    },
+    {
+      "id": "PI-HIDDEN-01",
+      "severity": "medium",
+      "pattern": "[\\u200B-\\u200F\\u202A-\\u202E\\u2060\\uFEFF]",
+      "description": "ゼロ幅・双方向制御文字（不可視テキスト隠蔽）",
+      "action": "warn"
+    }
+  ],
+
+  "comment_and_control_patterns": [
+    {
+      "id": "CC-AUTOMERGE-01",
+      "severity": "critical",
+      "pattern": "(?i)(auto|automatically|please) (merge|approve|close|lgtm)",
+      "description": "勝手にマージ・承認させようとする誘導",
+      "action": "warn"
+    },
+    {
+      "id": "CC-CI-01",
+      "severity": "high",
+      "pattern": "(?i)(disable|skip|bypass) (ci|tests?|checks)",
+      "description": "CI/テストスキップ誘導",
+      "action": "block"
+    },
+    {
+      "id": "CC-SECRET-01",
+      "severity": "critical",
+      "pattern": "(?i)(commit|push|expose|share) (the |my )?(\\.env|secret|token|key|credential)",
+      "description": "機密ファイルのコミット誘導",
+      "action": "block"
+    }
+  ],
+
+  "known_cves": [
+    {
+      "id": "CVE-2025-54794",
+      "description": "Claude Code 経路制約バイパス",
+      "affected_versions": "≤ v0.2.111",
+      "mitigation": "v0.2.111 超のバージョンを使用"
+    },
+    {
+      "id": "CVE-2025-54795",
+      "description": "Claude Code コマンド実行脆弱性",
+      "affected_versions": "≤ v1.0.20",
+      "mitigation": "v1.0.20 超のバージョンを使用"
+    },
+    {
+      "id": "CVE-2025-55284",
+      "description": "Claude Code DNS exfil による API key 窃取",
+      "affected_versions": "不明",
+      "mitigation": "最新版維持 + 外向き DNS 監視"
+    },
+    {
+      "id": "ADVERSA-NOOP",
+      "description": "50 個の no-op subcommand による deny rule 迂回",
+      "affected_versions": "≤ v2.1.90",
+      "mitigation": "v2.1.90 超のバージョンを使用"
+    },
+    {
+      "id": "ISSUE-17544",
+      "description": "--dangerously-skip-permissions と --permission-mode plan の silent override bug",
+      "affected_versions": "複数",
+      "mitigation": "両フラグの組合せを避ける、Phase 20 で Docker Sandbox に移行"
+    }
+  ]
+}

@@ -1,0 +1,129 @@
+# =============================================================================
+# voice_horror .gitignore
+# Unity project is at: voice_Horror_Game/
+# =============================================================================
+
+# ---------------- Unity standard ----------------
+# (any-depth match, so works for voice_Horror_Game/Library/ etc.)
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+[Mm]emoryCaptures/
+[Rr]ecordings/
+
+# Asset meta files for ignored folders shouldn't matter, but keep .meta tracked elsewhere
+# Unity auto-generates project files
+*.csproj
+*.sln
+*.suo
+*.tmp
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+*.pidb.meta
+*.pdb.meta
+*.mdb.meta
+
+# Unity crashes
+sysinfo.txt
+crashlytics-build.properties
+
+# Builds
+*.apk
+*.aab
+*.unitypackage
+*.app
+
+# ---------------- OS ----------------
+.DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# ---------------- IDE ----------------
+.idea/
+.vs/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ---------------- Claude Code ----------------
+.claude/settings.local.json
+.claude/plans/
+.claude/cost-log.jsonl
+.claude/.dream-pending
+
+# ---------------- Build / test output ----------------
+TestResults.xml
+TestResults_*.xml
+TestResults-*.xml
+build.log
+*.log
+
+# ---------------- Feature database (local state) ----------------
+feature-log.db
+feature-log.db-wal
+feature-log.db-shm
+
+# ---------------- Environment / Secrets ----------------
+.env
+.env.local
+*.key
+*.pem
+secrets/
+
+# =============================================================================
+# voice_horror project-specific
+# =============================================================================
+
+# ---------------- UHFPS (paid asset, must NOT be committed) ----------------
+# Asset path: voice_Horror_Game/Assets/ThunderWire Studio/UHFPS/
+# Total size: ~2.3GB. Buyer must re-import from Unity Asset Store.
+voice_Horror_Game/Assets/ThunderWire Studio/UHFPS/
+voice_Horror_Game/Assets/ThunderWire Studio/UHFPS.meta
+# (Keep the parent folder "ThunderWire Studio" so future ThunderWire assets can coexist)
+
+# ---------------- ComfyUI / TTS model weights (huge binaries) ----------------
+*.safetensors
+*.gguf
+*.ckpt
+*.pt
+*.pth
+*.bin
+*.onnx
+
+# ---------------- Generated TTS audio (ComfyUI output, large) ----------------
+# Sample reference audio is small enough to commit; explicitly allow it.
+*.wav
+*.mp3
+*.ogg
+*.flac
+*.m4a
+!voiceCoppy_test/my_sampleVoice.wav
+!voiceCoppy_test/my_sampleVoice.m4a
+
+# ---------------- Heavy 3D / animation binaries ----------------
+*.fbx
+*.blend
+*.blend1
+*.max
+*.ma
+*.mb
+
+# ---------------- NuGet / Unity Packages folder ----------------
+voice_Horror_Game/Assets/Packages/
+
+# ---------------- Wave 5 Phase 24: compound auto-extract drafts ----------------
+docs/compound/_drafts/*.md
+!docs/compound/_drafts/.gitkeep

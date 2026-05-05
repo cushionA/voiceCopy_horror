@@ -1,0 +1,441 @@
+{
+  "$schema": "./lint-patterns.schema.json",
+  "version": 1,
+  "description": "SisterGame Unity C# コードの機械検出可能な NG パターン。tools/lint-check.sh (Phase 11) が source of truth として読む。",
+  "updated": "2026-04-24",
+  "source_rules": [
+    "unity-conventions.md",
+    "architecture.md",
+    "asset-workflow.md"
+  ],
+
+  "patterns": [
+    {
+      "id": "CS-STYLE-001",
+      "severity": "error",
+      "language": ["cs"],
+      "scope": ["Assets/**/*.cs"],
+      "exclude": ["Assets/Plugins/**", "Assets/AssetInventory/**"],
+      "pattern": "\\bvar\\s+\\w+\\s*=",
+      "message": "var 禁止（型を明示）",
+      "hint": "List<T> list = ... のように型を書く",
+      "source": "unity-conventions.md L84"
+    },
+    {
+      "id": "CS-NAME-001",
+      "severity": "warning",
+      "language": ["cs"],
+      "scope": ["Assets/MyAsset/**/*.cs"],
+      "pattern": "private\\s+\\w+\\s+[A-Z]\\w*\\s*;",
+      "message": "private フィールドは _camelCase（先頭アンダースコア + camelCase）",
+      "hint": "_currentHealth のように先頭 _ + 小文字始まり",
+      "source": "unity-conventions.md L25"
+    },
+    {
+      "id": "CS-NAME-002",
+      "severity": "warning",
+      "language": ["cs"],
+      "scope": ["Assets/MyAsset/**/*.cs"],
+      "pattern": "(public|private)\\s+const\\s+\\w+\\s+(?!k_)[A-Z]",
+      "message": "const は k_PascalCase を使用",
+      "hint": "const float k_MaxSpeed = 10f;",
+      "source": "unity-conventions.md L26"
+    },
+    {
+      "id": "CS-NAME-003",
+      "severity": "error",
+      "language": ["cs"],
+      "pattern": "public\\s+class\\s+I[A-Z]",
+      "message": "I プレフィックスはインターフェース専用（class には使わない）",
+      "source": "unity-conventions.md L20"
+    },
+    {
+      "id": "CS-NAME-004",
+      "severity": "error",
+      "language": ["cs"],
+      "pattern": "interface\\s+(?!I[A-Z])",
+      "message": "インターフェースは I + PascalCase",
+      "hint": "IDamageable, IInteractable",
+      "source": "unity-conventions.md L20"
+    },
+    {
+      "id": "CS-FIELD-001",
+      "severity": "error",
+      "language": ["cs"],
+      "pattern": "\\[SerializeField\\]\\s+public",
+      "message": "SerializeField + public は矛盾（private を使用）",
+      "source": "unity-conventions.md L43"
+    },
+    {
+      "id": "CS-FIELD-002",
+      "severity": "error",
+      "language": ["cs"],
+      "pattern": "\\[SerializeField\\]\\s+private\\s+\\w+\\s+_[a-z]",
+      "message": "SerializeField は camelCase（アンダースコア不要）",
+      "hint": "[SerializeField] private float moveSpeed;",
+      "source": "unity-conventions.md L27"
+    },
+    {
+      "id": "CS-PERF-001",
+      "severity": "error",
+      "language": ["cs"],
+      "scope": ["Assets/MyAsset/**/*.cs"],
+      "exclude": ["Assets/Tests/**", "Assets/Editor/**"],
+      "pattern": "void\\s+Update\\s*\\([^)]*\\)[\\s\\S]*?new\\s+[A-Z][A-Za-z]*",
+      "multiline": true,
+      "message": "Update 内でのアロケーション禁止",
+      "hint": "フィールドで事前確保して Clear() で再利用する",
+      "source": "unity-conventions.md L88-102"
+    },
+    {
+      "id": "CS-PERF-002",
+      "severity": "warning",
+      "language": ["cs"],
+      "pattern": "\\bVector[23]\\.Distance\\s*\\(",
+      "message": "Vector.Distance は sqrt 呼出。sqrMagnitude 比較が推奨",
+      "hint": "(a - b).sqrMagnitude < range * range （range は事前に 2 乗キャッシュ）",
+      "source": "unity-conventions.md L113"
+    },
+    {
+      "id": "CS-PERF-003",
+      "severity": "warning",
+      "language": ["cs"],
+      "pattern": "\\.tag\\s*==\\s*\"",
+      "message": "tag の == 比較は CompareTag 推奨（文字列比較は遅い）",
+      "hint": "obj.CompareTag(\"Player\")",
+      "source": "unity-conventions.md L117"
+    },
+    {
+      "id": "CS-PERF-004",
+      "severity": "error",
+      "language": ["cs"],
+      "pattern": "FindObjectOfType\\s*<",
+      "message": "FindObjectOfType 使用禁止（GameManager 経由のハッシュアクセスを使用）",
+      "source": "architecture.md L22-25"
+    },
+    {
+      "id": "CS-PERF-005",
+      "severity": "warning",
+      "language": ["cs"],
+      "pattern": "void\\s+Update\\s*\\([^)]*\\)[\\s\\S]*?\"\\s*\\+\\s*",
+      "multiline": true,
+      "message": "Update 内での文字列連結禁止（StringBuilder 使用）",
+      "source": "unity-conventions.md L104-106"
+    },
+    {
+      "id": "CS-PERF-006",
+      "severity": "warning",
+      "language": ["cs"],
+      "scope": ["Assets/MyAsset/**/*.cs"],
+      "pattern": "GetComponent<[^>]+>\\s*\\(\\)",
+      "message": "GetComponent は Awake/Start でキャッシュ推奨",
+      "hint": "private Rigidbody2D _rb; void Awake() { _rb = GetComponent<Rigidbody2D>(); }",
+      "source": "unity-conventions.md L108"
+    },
+    {
+      "id": "CS-MAGIC-001",
+      "severity": "warning",
+      "language": ["cs"],
+      "scope": ["Assets/MyAsset/**/*.cs"],
+      "pattern": "(transform\\.position\\s*\\+?=\\s*[^;]*\\s*\\*\\s*\\d+\\.\\d+f)",
+      "message": "マジックナンバー疑い（const k_ を検討）",
+      "hint": "private const float k_Gravity = 9.81f;",
+      "source": "unity-conventions.md L62-70"
+    },
+    {
+      "id": "CS-ASSET-001",
+      "severity": "error",
+      "language": ["cs"],
+      "scope": ["Assets/MyAsset/Runtime/**/*.cs", "Assets/MyAsset/Core/**/*.cs"],
+      "pattern": "\\bAssetDatabase\\.",
+      "message": "ランタイムコードで AssetDatabase 使用禁止（Addressable を使用）",
+      "source": "asset-workflow.md L219"
+    },
+    {
+      "id": "CS-ASSET-002",
+      "severity": "error",
+      "language": ["cs"],
+      "scope": ["Assets/MyAsset/**/*.cs"],
+      "pattern": "\\bResources\\.Load",
+      "message": "Resources.Load 禁止（Addressable を使用）",
+      "hint": "Addressables.LoadAssetAsync<T>(\"address\")",
+      "source": "asset-workflow.md L48"
+    },
+    {
+      "id": "CS-ASSET-003",
+      "severity": "warning",
+      "language": ["cs"],
+      "pattern": "Addressables\\.LoadAssetAsync\\s*<[^>]+>\\s*\\([^;]+;(?![\\s\\S]*?\\.Release)",
+      "multiline": true,
+      "message": "LoadAssetAsync したアセットは Release で解放する",
+      "source": "asset-workflow.md L180"
+    },
+    {
+      "id": "CS-ASSET-004",
+      "severity": "warning",
+      "language": ["cs"],
+      "pattern": "Addressables\\.InstantiateAsync\\s*\\([^;]+;(?![\\s\\S]*?\\.ReleaseInstance)",
+      "multiline": true,
+      "message": "InstantiateAsync は ReleaseInstance で破棄",
+      "source": "asset-workflow.md L183"
+    },
+    {
+      "id": "CS-ASSET-005",
+      "severity": "error",
+      "language": ["cs"],
+      "pattern": "LoadAssetAsync\\s*<[^>]+>\\s*\\(\\s*\"[^\"]*[A-Z]",
+      "message": "Addressable アドレスは小文字・ハイフン区切り（sprite/player/idle など）",
+      "source": "asset-workflow.md L138-141"
+    },
+    {
+      "id": "CS-LOG-001",
+      "severity": "warning",
+      "language": ["cs"],
+      "scope": ["Assets/MyAsset/Core/**/*.cs"],
+      "pattern": "\\bDebug\\.Log\\s*\\(",
+      "message": "Core 層では Debug.Log より AILogger.Log を使用",
+      "hint": "AILogger.Log(\"message\") — ENABLE_AI_LOGGING で切替可能",
+      "source": "CLAUDE.md ログ規約"
+    },
+    {
+      "id": "CS-STYLE-002",
+      "severity": "error",
+      "language": ["cs"],
+      "pattern": "^\\t",
+      "message": "タブインデント禁止（スペース 4 つ）",
+      "source": "unity-conventions.md L81"
+    },
+    {
+      "id": "CS-BRACE-001",
+      "severity": "warning",
+      "language": ["cs"],
+      "pattern": "if\\s*\\([^)]+\\)\\s*[^{\\n]",
+      "message": "if は 1 行でも中括弧を付ける（csharp_prefer_braces）",
+      "source": "unity-conventions.md L83"
+    },
+    {
+      "id": "CS-EVENT-001",
+      "severity": "warning",
+      "language": ["cs"],
+      "scope": ["Assets/MyAsset/**/*.cs"],
+      "pattern": "Awake\\s*\\(\\)[\\s\\S]*?\\b\\w+\\s*\\+=\\s*\\w+",
+      "multiline": true,
+      "message": "イベント登録は OnEnable で行う（Awake ではなく）",
+      "source": "unity-conventions.md L74"
+    },
+    {
+      "id": "CS-ENUM-001",
+      "severity": "warning",
+      "language": ["cs"],
+      "pattern": "enum\\s+\\w+s\\s*\\{(?!.*\\[Flags\\])",
+      "message": "複数形 enum には [Flags] 属性が必要",
+      "source": "unity-conventions.md L29"
+    },
+    {
+      "id": "CS-BOOL-001",
+      "severity": "info",
+      "language": ["cs"],
+      "pattern": "\\bbool\\s+(?!is|has|can|should|was|were|will|did|does)[a-z]\\w*\\s*[;=]",
+      "message": "bool は is/has/can/should 等の動詞で始める",
+      "hint": "bool isAlive / bool hasWeapon / bool canJump",
+      "source": "unity-conventions.md L34"
+    },
+    {
+      "id": "CS-ASYNC-001",
+      "severity": "warning",
+      "language": ["cs"],
+      "pattern": "\\basync\\s+void\\s+",
+      "message": "async void 避ける（async Task 推奨、Unity イベントハンドラは例外）",
+      "source": "unity-conventions.md L127"
+    },
+    {
+      "id": "CS-TEMP-001",
+      "severity": "warning",
+      "language": ["cs"],
+      "scope": ["Assets/MyAsset/**/*.cs"],
+      "pattern": "\\bSystem\\.DateTime\\.Now",
+      "message": "ゲームロジック内は Time.time を推奨",
+      "source": "unity-conventions.md"
+    },
+    {
+      "id": "CS-CORO-001",
+      "severity": "warning",
+      "language": ["cs"],
+      "scope": ["Assets/MyAsset/Core/**/*.cs"],
+      "pattern": "Coroutine|StartCoroutine",
+      "message": "Core 層（ピュアロジック）で Coroutine/MonoBehaviour 依存は避ける",
+      "source": "architecture.md L134"
+    },
+    {
+      "id": "CS-RESOURCE-001",
+      "severity": "error",
+      "language": ["cs"],
+      "scope": ["Assets/MyAsset/Runtime/**/*.cs"],
+      "pattern": "OnEnable\\s*\\(\\)[\\s\\S]*?\\+=(?![\\s\\S]*?OnDisable\\s*\\(\\)[\\s\\S]*?-=)",
+      "multiline": true,
+      "message": "OnEnable で購読したイベントは OnDisable で解除（対称性）",
+      "source": "test-driven.md L44, unity-conventions.md L74-77"
+    },
+    {
+      "id": "CS-FIND-001",
+      "severity": "warning",
+      "language": ["cs"],
+      "scope": ["Assets/MyAsset/**/*.cs"],
+      "pattern": "GameObject\\.Find\\s*\\(\\s*\"",
+      "message": "GameObject.Find はタグまたは参照渡しで代替推奨",
+      "source": "architecture.md, パフォーマンス規約"
+    },
+    {
+      "id": "CS-NAMESPACE-001",
+      "severity": "warning",
+      "language": ["cs"],
+      "scope": ["Assets/MyAsset/**/*.cs"],
+      "pattern": "^(?!.*namespace\\s)[\\s\\S]*?class\\s+\\w+\\s*:\\s*MonoBehaviour",
+      "multiline": true,
+      "message": "名前空間を必ず指定（MyGame.PlayerSystems 等）",
+      "source": "unity-conventions.md L30"
+    },
+    {
+      "id": "CS-TEST-001",
+      "severity": "warning",
+      "language": ["cs"],
+      "scope": ["Assets/MyAsset/**/*.cs"],
+      "exclude": ["Assets/Tests/**"],
+      "pattern": "\\[Test\\]|\\[UnityTest\\]",
+      "message": "Test 属性は Assets/Tests/ 配下に配置",
+      "source": "test-driven.md L8-10"
+    },
+    {
+      "id": "CS-ENUM-002",
+      "severity": "info",
+      "language": ["cs"],
+      "pattern": "enum\\s+\\w+(?!\\s*:\\s*byte)\\s*\\{[^}]{0,60}\\}",
+      "message": "値が少ない enum は : byte 指定でメモリ節約可",
+      "source": "unity-conventions.md L121"
+    },
+    {
+      "id": "CS-CONST-001",
+      "severity": "warning",
+      "language": ["cs"],
+      "pattern": "transform\\.position\\s*\\+=[^;]*9\\.81f",
+      "message": "9.81f のようなリテラル重力定数は const k_ 化",
+      "source": "unity-conventions.md L62-70"
+    },
+    {
+      "id": "CS-CAMEL-001",
+      "severity": "info",
+      "language": ["cs"],
+      "pattern": "public\\s+class\\s+[a-z]",
+      "message": "クラス名は PascalCase（大文字始まり）",
+      "source": "unity-conventions.md L15"
+    },
+    {
+      "id": "CS-LOC-001",
+      "severity": "info",
+      "language": ["cs"],
+      "pattern": "class\\s+\\w+[\\s\\S]{5000,}",
+      "multiline": true,
+      "message": "クラスが 200 行超の可能性。責務分割を検討（1 コンポーネント 1 責務）",
+      "source": "unity-conventions.md L39, architecture.md L59"
+    },
+    {
+      "id": "CS-EDITOR-001",
+      "severity": "warning",
+      "language": ["cs"],
+      "scope": ["Assets/MyAsset/Runtime/**/*.cs", "Assets/MyAsset/Core/**/*.cs"],
+      "pattern": "#if UNITY_EDITOR[\\s\\S]*?\\bDebug\\.Log",
+      "multiline": true,
+      "message": "エディター限定 Debug.Log は [Conditional(\"UNITY_EDITOR\")] メソッド化を検討",
+      "source": "unity-conventions.md L129"
+    },
+    {
+      "id": "MD-EMOJI-001",
+      "severity": "warning",
+      "language": ["md", "cs"],
+      "exclude": ["docs/FUTURE_TASKS.md", "docs/ARCHIVED_TASKS.md", ".claude/plans/**"],
+      "pattern": "[\\u{1F300}-\\u{1FAFF}]|[\\u{2600}-\\u{26FF}]",
+      "message": "絵文字は規約外（ユーザー明示指示時と特定ドキュメント以外は不使用）",
+      "source": "unity-conventions.md"
+    },
+    {
+      "id": "TODO-MARKER-001",
+      "severity": "info",
+      "language": ["cs", "md"],
+      "pattern": "\\b(TODO|FIXME|XXX|HACK)\\b",
+      "message": "未処理マーカー検出（docs/FUTURE_TASKS.md に登録を検討）",
+      "source": "CLAUDE.md 将来タスク管理"
+    },
+    {
+      "id": "COMMIT-LANG-001",
+      "severity": "error",
+      "language": ["commit-msg"],
+      "pattern": "^(feat|fix|test|refactor|style|perf|chore|asset|docs)\\([^)]+\\):\\s+[A-Za-z]",
+      "message": "コミットメッセージは日本語タイトル（[種類](範囲): 日本語タイトル）",
+      "source": "git-workflow.md L14-25"
+    },
+    {
+      "id": "CS-PERF-NONALLOC-001",
+      "severity": "warning",
+      "language": ["cs"],
+      "scope": ["Assets/MyAsset/**/*.cs"],
+      "exclude": ["Assets/MyAsset/**/Tests/**"],
+      "pattern": "Physics\\.RaycastAll\\s*\\(",
+      "message": "RaycastAll は GC alloc を発生させる。RaycastNonAlloc + 事前確保バッファを推奨",
+      "hint": "private readonly RaycastHit[] _hitBuffer = new RaycastHit[16]; → Physics.RaycastNonAlloc(ray, _hitBuffer, ...)",
+      "source": "unity-conventions.md 物理クエリ規約 / unity-physics-queries"
+    },
+    {
+      "id": "CS-PERF-NONALLOC-002",
+      "severity": "warning",
+      "language": ["cs"],
+      "scope": ["Assets/MyAsset/**/*.cs"],
+      "exclude": ["Assets/MyAsset/**/Tests/**"],
+      "pattern": "Physics\\.OverlapSphere\\s*\\(",
+      "message": "OverlapSphere は GC alloc を発生させる。OverlapSphereNonAlloc + 事前確保バッファを推奨",
+      "hint": "private readonly Collider[] _overlapBuffer = new Collider[32]; → Physics.OverlapSphereNonAlloc(...)",
+      "source": "unity-conventions.md 物理クエリ規約 / unity-physics-queries"
+    },
+    {
+      "id": "CS-LIFECYCLE-FAKENULL-001",
+      "severity": "warning",
+      "language": ["cs"],
+      "scope": ["Assets/MyAsset/**/*.cs"],
+      "exclude": ["Assets/MyAsset/**/Tests/**"],
+      "pattern": "\\b\\w+\\?\\.[A-Za-z]\\w*\\s*\\(",
+      "message": "Unity Object に対する null 条件演算子 (?.) は fake-null を見逃す。== null チェックを使う",
+      "hint": "if (component != null) component.Method(); ※ ただし純 C# オブジェクトには ?. を使って良い",
+      "source": "unity-conventions.md ライフサイクル罠 / unity-lifecycle"
+    },
+    {
+      "id": "CS-LIFECYCLE-DESTROYIMMEDIATE-001",
+      "severity": "error",
+      "language": ["cs"],
+      "scope": ["Assets/MyAsset/Runtime/**/*.cs"],
+      "pattern": "DestroyImmediate\\s*\\(",
+      "message": "DestroyImmediate はランタイム禁止（Editor 専用）。通常の Destroy() を使う",
+      "hint": "Editor スクリプトでのみ使用可。ランタイムでは Destroy(obj) で遅延破棄を受け入れる",
+      "source": "unity-conventions.md ライフサイクル罠 / unity-lifecycle"
+    },
+    {
+      "id": "CS-ASYNC-VOID-001",
+      "severity": "warning",
+      "language": ["cs"],
+      "scope": ["Assets/MyAsset/**/*.cs"],
+      "exclude": ["Assets/MyAsset/**/Tests/**"],
+      "pattern": "\\basync\\s+void\\s+\\w+\\s*\\(",
+      "message": "async void は例外伝播せず crash 原因になる。async Awaitable / async Task を使う",
+      "hint": "async Awaitable Method() { ... } で例外がフレームに伝播される",
+      "source": "unity-conventions.md async/await 致命罠 / unity-async-patterns"
+    },
+    {
+      "id": "CS-FOUND-INSTANTIATE-PARENT-001",
+      "severity": "info",
+      "language": ["cs"],
+      "scope": ["Assets/MyAsset/**/*.cs"],
+      "pattern": "Instantiate\\s*\\([^)]+\\)\\.transform\\.SetParent\\s*\\(",
+      "message": "Instantiate + SetParent の 2 段階よりも、Instantiate 4 引数構文 (prefab, pos, rot, parent) を推奨",
+      "hint": "Instantiate(prefab, position, rotation, parentTransform) で一括設定",
+      "source": "unity-conventions.md 基礎 API 罠 / unity-foundations"
+    }
+  ]
+}

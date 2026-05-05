@@ -1,0 +1,93 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Lint Patterns Schema",
+  "description": "SisterGame .claude/rules/lint-patterns.json のスキーマ定義。tools/lint_check.py が起動時に参照する。",
+  "type": "object",
+  "required": ["version", "patterns"],
+  "additionalProperties": true,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "パターンファイルのバージョン番号"
+    },
+    "description": {
+      "type": "string"
+    },
+    "updated": {
+      "type": "string",
+      "format": "date"
+    },
+    "source_rules": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "patterns": {
+      "type": "array",
+      "description": "静的分析パターン一覧",
+      "items": {
+        "type": "object",
+        "required": ["id", "severity", "pattern", "message"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Z]+-[A-Z]+-\\d{3}$",
+            "description": "パターンID（例: CS-STYLE-001）"
+          },
+          "severity": {
+            "enum": ["error", "warning", "info"],
+            "description": "深刻度"
+          },
+          "language": {
+            "type": "array",
+            "items": {
+              "enum": ["cs", "md", "json", "commit-msg"]
+            },
+            "description": "対象言語（空 = 全言語）"
+          },
+          "scope": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "対象パス glob（空 = 全ファイル）"
+          },
+          "exclude": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "除外パス glob"
+          },
+          "pattern": {
+            "type": "string",
+            "description": "検出 regex パターン（Python re 構文）"
+          },
+          "multiline": {
+            "type": "boolean",
+            "default": false,
+            "description": "true の場合 re.DOTALL を有効化（複数行マッチ）"
+          },
+          "message": {
+            "type": "string",
+            "description": "違反時に表示するメッセージ"
+          },
+          "hint": {
+            "type": "string",
+            "description": "修正方法のヒント（省略可）"
+          },
+          "source": {
+            "type": "string",
+            "description": "根拠となるルール文書の参照（省略可）"
+          }
+        }
+      }
+    }
+  }
+}

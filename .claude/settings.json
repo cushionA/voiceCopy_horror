@@ -1,0 +1,43 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/post-edit-dispatch.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/stop-handoff-reminder.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/stop-cost-log.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/stop-compound-extract.sh"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/session-start-registry.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

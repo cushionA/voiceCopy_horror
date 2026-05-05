@@ -1,0 +1,72 @@
+{
+  "last_node_id": 9,
+  "last_link_id": 9,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "CheckpointLoaderSimple",
+      "pos": [0, 0],
+      "size": [315, 98],
+      "properties": {},
+      "widgets_values": ["rinFlanimeIllustrious_v30.safetensors"]
+    },
+    {
+      "id": 2,
+      "type": "CLIPTextEncode",
+      "pos": [400, -100],
+      "size": [400, 200],
+      "properties": {},
+      "widgets_values": ["masterpiece, best quality, very aesthetic, newest, absurdres, flat color, clean lineart, 1girl, solo, child, 10 years old, blonde hair, long hair, blunt bangs, blue eyes, tareme, gentle smile, dark blue nun habit, white wimple, white cuffs, gold cross necklace, standing, from side, full body, white background, game character design, 2d game sprite"]
+    },
+    {
+      "id": 3,
+      "type": "CLIPTextEncode",
+      "pos": [400, 150],
+      "size": [400, 200],
+      "properties": {},
+      "widgets_values": ["worst quality, low quality, lowres, bad anatomy, text, watermark, signature, shiny skin, glossy, high contrast, 3d render, realistic"]
+    },
+    {
+      "id": 4,
+      "type": "EmptyLatentImage",
+      "pos": [400, 400],
+      "size": [315, 106],
+      "properties": {},
+      "widgets_values": [864, 1152, 1]
+    },
+    {
+      "id": 5,
+      "type": "KSampler",
+      "pos": [900, 0],
+      "size": [315, 262],
+      "properties": {},
+      "widgets_values": [42, "fixed", 25, 3.5, "euler", "normal", 1]
+    },
+    {
+      "id": 6,
+      "type": "VAEDecode",
+      "pos": [1300, 0],
+      "size": [210, 46],
+      "properties": {}
+    },
+    {
+      "id": 7,
+      "type": "SaveImage",
+      "pos": [1550, 0],
+      "size": [315, 270],
+      "properties": {},
+      "widgets_values": ["flanime_sister"]
+    }
+  ],
+  "links": [
+    [1, 1, 0, 5, 0, "MODEL"],
+    [2, 1, 1, 2, 0, "CLIP"],
+    [3, 1, 1, 3, 0, "CLIP"],
+    [4, 2, 0, 5, 1, "CONDITIONING"],
+    [5, 3, 0, 5, 2, "CONDITIONING"],
+    [6, 4, 0, 5, 3, "LATENT"],
+    [7, 5, 0, 6, 0, "LATENT"],
+    [8, 1, 2, 6, 1, "VAE"],
+    [9, 6, 0, 7, 0, "IMAGE"]
+  ]
+}
