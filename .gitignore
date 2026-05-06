@@ -102,6 +102,7 @@ voice_Horror_Game/Assets/ThunderWire Studio/UHFPS.meta
 *.pth
 *.bin
 *.onnx
+*.onnx.data
 
 # ---------------- Generated TTS audio (ComfyUI output, large) ----------------
 # Sample reference audio is small enough to commit; explicitly allow it.
