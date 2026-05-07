@@ -15,8 +15,8 @@ public static class SentisSpikeSetupPhase3
     const string k_ScenePath    = "Assets/SentisSpike/SentisTest.unity";
     const string k_CampplusPath = "Assets/SentisSpike/Models/campplus.onnx";
     const string k_TokenizerPath= "Assets/SentisSpike/Models/speech_tokenizer_v3.onnx";
-    const string k_DitPath      = "Assets/SentisSpike/Models/flow.decoder.estimator.fp32.onnx";
-    const string k_HiftPath     = "Assets/SentisSpike/Models/hift.fp32.onnx";
+    const string k_DitPath      = "Assets/SentisSpike/Models/flow.decoder.estimator.merged.fp32.onnx";
+    const string k_HiftPath     = "Assets/SentisSpike/Models/hift.fixed.fp32.onnx";
 
     [MenuItem("Tools/Sentis Spike/Setup VC Test Scene (Phase 3)")]
     public static void SetupPhase3()
