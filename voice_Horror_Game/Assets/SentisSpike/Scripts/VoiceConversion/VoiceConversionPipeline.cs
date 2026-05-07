@@ -2,12 +2,12 @@
 // voice_horror Phase 3 (2026-05-07)
 //
 // Pipeline:
-//   1. Resample source audio to 16 kHz + 22050 Hz
+//   1. Resample source audio to 16 kHz (campplus) + 24000 Hz (acoustic mel / hift)
 //   2. campplus    : mel80 [1,T,80]  → spk_emb [1,192] → project → spks [1,80]
 //   3. tokenizer   : mel128 [1,128,T] → indices (unused in VC; kept for completeness)
 //   4. DiT ODE     : x[noise] + mu[src_mel] + spks → mel_out [1,80,100]
 //   5. hift        : mel_out [1,80,T] → audio [1,T_audio]
-//   6. Create AudioClip at 22050 Hz
+//   6. Create AudioClip at 24000 Hz (cosyvoice3.yaml: sample_rate=24000)
 //
 // NOTE: In full CosyVoice3, mu comes from an LLM token decoder.
 //       Phase 3 approximation: mu = source acoustic mel (mel-to-mel VC).
@@ -47,8 +47,9 @@ namespace VoiceHorror.VC
         public int         odeSteps    = 10;
         public int         ditSeed     = 42;
 
-        // Output sample rate for hift (must match model's training SR)
-        const int k_HiftSR = 22050;
+        // Output sample rate for hift (must match model's training SR).
+        // cosyvoice3.yaml: sample_rate: 24000
+        const int k_HiftSR = 24000;
 
         // campplus mel フレーム数の上限。
         // Sentis の AveragePool ceil_mode=1 が floor として動作するバグ回避のため、
@@ -139,12 +140,12 @@ namespace VoiceHorror.VC
             float[] spks80 = _projection.Project(targetSpkEmb); // [80]
 
             // ── Step 2: Extract acoustic mel from source audio ──────────
-            float[] audio22k   = GetAudio22k(sourceClip);
-            float[,] acouMel   = MelExtractor.ExtractAcousticMel(audio22k); // [80, T_src]
+            float[] audio24k   = GetAudio24k(sourceClip);
+            float[,] acouMel   = MelExtractor.ExtractAcousticMel(audio24k); // [80, T_src]
             int melLength      = acouMel.GetLength(1);
             float[,] mu80x100  = MelExtractor.PadOrTruncate(acouMel, 100); // [80, 100]
 
-            Debug.Log($"[VC] Mel: src_T={melLength}, clamped to 100. audio22k={audio22k.Length} samples");
+            Debug.Log($"[VC] Mel: src_T={melLength}, clamped to 100. audio24k={audio24k.Length} samples");
 
             // ── Step 3: ODE flow matching ────────────────────────────────
             sw.Restart();
@@ -175,8 +176,8 @@ namespace VoiceHorror.VC
         {
             // CPU work first frame
             float[] spks80   = _projection.Project(targetSpkEmb);
-            float[] audio22k = GetAudio22k(source);
-            float[,] acouMel = MelExtractor.ExtractAcousticMel(audio22k);
+            float[] audio24k = GetAudio24k(source);
+            float[,] acouMel = MelExtractor.ExtractAcousticMel(audio24k);
             int melLength    = acouMel.GetLength(1);
             float[,] mu      = MelExtractor.PadOrTruncate(acouMel, 100);
             yield return null; // yield before GPU work
@@ -227,12 +228,12 @@ namespace VoiceHorror.VC
             return MelExtractor.Resample(mono, clip.frequency, 16000);
         }
 
-        float[] GetAudio22k(AudioClip clip)
+        float[] GetAudio24k(AudioClip clip)
         {
             float[] raw  = new float[clip.samples * clip.channels];
             clip.GetData(raw, 0);
             float[] mono = ToMono(raw, clip.channels);
-            return MelExtractor.Resample(mono, clip.frequency, 22050);
+            return MelExtractor.Resample(mono, clip.frequency, 24000);
         }
 
         static float[] ToMono(float[] audio, int channels)
