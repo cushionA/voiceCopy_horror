@@ -18,7 +18,6 @@
 | ベース | UHFPS テンプレート（ThunderWire Studio） |
 
 ### コアメカニクス
-- **3 体の幽霊**: マギー（臆病）/ アルフレッド（勇敢）/ マークス（賢い）
 - **攻略**: 各幽霊 4 文書（計 12 個）を読み切ると攻撃が通じる
 - **ボイス強化**: マイク入力で敵が強化（時間で半減）
 - **推理パズル**: 死因と性格・外傷の照合
@@ -111,8 +110,6 @@ ComfyUI Desktop と TTS-Audio-Suite カスタムノードが必要です:
 | UHFPS アセット | ThunderWire Studio 有料ライセンス（**再配布禁止**、含まれていません） |
 | Qwen3-TTS モデル | Apache 2.0 |
 | `.claude/refs/external/nice-wolf-studio/` | MIT（出典明記、`_attribution.md` 参照） |
-
-UHFPS / ComfyUI モデルウェイト / API キー / 録音データは **絶対に commit しないでください**（`.gitignore` で除外済み）。
 
 ---
 
