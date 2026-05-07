@@ -50,6 +50,10 @@ namespace VoiceHorror.VC
         // Output sample rate for hift (must match model's training SR)
         const int k_HiftSR = 22050;
 
+        // campplus モデルの静的シーケンス長上限 (export 時の固定値)
+        // 1500 フレーム × hop=160 / 16000Hz ≈ 15 秒。それ以上は先頭 15 秒で十分。
+        const int k_CampplusMaxFrames = 1500;
+
         // Workers (created lazily, reused across calls)
         Worker _campplusWorker;
         Worker _tokenizerWorker;
@@ -90,7 +94,12 @@ namespace VoiceHorror.VC
 
             float[] audio16k = GetAudio16k(refClip);
             float[,] mel     = MelExtractor.ExtractFeatureMel80(audio16k); // [T, 80]
-            int T            = mel.GetLength(0);
+
+            // campplus は export 時に最大 1500 フレームで静的確保されている。
+            // 超過すると Mul で (1,32,T) × (1,32,1500) の broadcast エラーが出るため先頭で切り捨て。
+            int T = Math.Min(mel.GetLength(0), k_CampplusMaxFrames);
+            if (mel.GetLength(0) > k_CampplusMaxFrames)
+                Debug.LogWarning($"[VC] campplus: mel truncated {mel.GetLength(0)} → {T} frames (≈{T * 160 / 16000f:F1}s)");
 
             // Flatten to [1, T, 80] row-major
             float[] flat = new float[T * 80];
