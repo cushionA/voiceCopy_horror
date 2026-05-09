@@ -100,6 +100,11 @@ namespace VoiceHorror.KnnVc
 
         IEnumerator Start()
         {
+            // Profiler を見やすくするため 60fps 固定
+            // (vSync を切らないと targetFrameRate が無視される環境がある)
+            QualitySettings.vSyncCount = 0;
+            Application.targetFrameRate = 60;
+
             if (service == null)
             {
                 _statusLine = "ERROR: service is not assigned";
