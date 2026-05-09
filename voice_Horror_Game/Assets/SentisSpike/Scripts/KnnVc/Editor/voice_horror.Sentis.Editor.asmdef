@@ -1,0 +1,19 @@
+{
+    "name": "voice_horror.Sentis.Editor",
+    "rootNamespace": "VoiceHorror",
+    "references": [
+        "voice_horror.Sentis",
+        "Unity.InferenceEngine"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

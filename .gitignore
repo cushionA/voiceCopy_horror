@@ -148,3 +148,4 @@ __pycache__/
 # ---------------- Sentis/VC debug runtime output (npy / wav per run) ----------------
 voice_Horror_Game/VcDebugOut/
 voiceCoppy_test/sentis_spike/
+VcTestOutput/
