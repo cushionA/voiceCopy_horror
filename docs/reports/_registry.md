@@ -6,11 +6,14 @@
 
 ### handoffs/
 
-- [2026-05-09 CosyVoice3 撤退決定 + Phase 5 kNN-VC 移行計画](handoffs/2026-05-09_phase3.5-pivot-to-knn-vc.md) — in-progress / branch: feature/phase4-game-integration
+- [2026-05-09 Phase 7 kNN-VC 統合実装完了 (Group A-F、28 EditMode tests pass)](handoffs/2026-05-09_phase7-knn-vc-implementation-complete.md) — ready-for-next-phase / branch: feature/phase5-knn-vc-spike
+- [2026-05-09 CosyVoice3 撤退決定 + Phase 5 kNN-VC 移行計画](handoffs/2026-05-09_phase3.5-pivot-to-knn-vc.md) — resolved / branch: feature/phase4-game-integration
 - [2026-05-07 Phase 3.5 ノイズ + 長さ問題の原因分析（Phase 3 アーキテクチャ誤り判明）](handoffs/2026-05-07_phase3.5-noise-and-length.md) — resolved / branch: feature/phase4-game-integration
 
 ### spikes/
 
+- [2026-05-09 kNN-VC Sentis 互換性検証 (Phase 6、warmup 後 PyTorch より 4x 高速)](spikes/2026-05-09_knn-vc-sentis-port.md)
+- [2026-05-09 kNN-VC ローカルスパイク (Phase 5 動作確認 + 品質確認、採用確定)](spikes/2026-05-09_knn-vc-local-spike.md)
 - [2026-05-07 CosyVoice Phase 4 ゲーム統合計画](spikes/2026-05-07_cosyvoice-phase4-plan.md)
 - [2026-05-07 CosyVoice Phase 3 パイプライン](spikes/2026-05-07_cosyvoice-phase3-pipeline.md)
 - [2026-05-07 CosyVoice Phase 2 ONNX export](spikes/2026-05-07_cosyvoice-phase2-onnx-export.md)

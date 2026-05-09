@@ -103,6 +103,10 @@ voice_Horror_Game/Assets/ThunderWire Studio/UHFPS.meta
 *.bin
 *.onnx
 *.onnx.data
+# Unity が ONNX import 時に自動生成する .meta も除外
+# (別マシンで .onnx を再生成すると新規 GUID が振られるため、共有不可)
+*.onnx.meta
+*.onnx.data.meta
 
 # ---------------- Generated TTS audio (ComfyUI output, large) ----------------
 # Sample reference audio is small enough to commit; explicitly allow it.
@@ -113,6 +117,10 @@ voice_Horror_Game/Assets/ThunderWire Studio/UHFPS.meta
 *.m4a
 !voiceCoppy_test/my_sampleVoice.wav
 !voiceCoppy_test/my_sampleVoice.m4a
+# Phase 7 タスク用テストデータ (TestSounds、合計 ~14MB)
+# my_sampleVoice.wav は user 個人音声、本番リリース時に要削除
+!voice_Horror_Game/Assets/SentisSpike/TestSounds/*.wav
+!voice_Horror_Game/Assets/SentisSpike/TestSounds/*.mp3
 
 # ---------------- Heavy 3D / animation binaries ----------------
 *.fbx
