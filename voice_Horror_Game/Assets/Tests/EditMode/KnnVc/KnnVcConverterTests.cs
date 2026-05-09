@@ -22,7 +22,7 @@ namespace VoiceHorror.KnnVc.Tests.EditMode
         [Test]
         public void C1_Convert_NoWeights_ReturnsCorrectShape()
         {
-            var converter = new KnnVcConverter { TopK = 4 };
+            using var converter = new KnnVcConverter { TopK = 4 };
 
             using var query = MakeRandomTensor(10, 1024, seed: 1);
             using var matchingSet = MakeRandomTensor(100, 1024, seed: 2);
@@ -46,7 +46,7 @@ namespace VoiceHorror.KnnVc.Tests.EditMode
         public void C1b_Convert_TopkAveraging_WorksCorrectly()
         {
             // matching set の特定 4 frame だけが query に近い場合、結果はその平均になるはず
-            var converter = new KnnVcConverter { TopK = 4 };
+            using var converter = new KnnVcConverter { TopK = 4 };
 
             // query = 全 1.0 / 全 0.0 等のシンプル
             using var query = MakeUniformTensor(1, 1024, value: 1.0f);
@@ -75,7 +75,7 @@ namespace VoiceHorror.KnnVc.Tests.EditMode
         [Test]
         public void C2_Convert_WithWeights_ZeroWeightFramesIgnored()
         {
-            var converter = new KnnVcConverter { TopK = 4 };
+            using var converter = new KnnVcConverter { TopK = 4 };
 
             // query = 全 1.0
             using var query = MakeUniformTensor(1, 1024, value: 1.0f);
@@ -108,7 +108,7 @@ namespace VoiceHorror.KnnVc.Tests.EditMode
         public void C2b_Convert_WithWeights_AlphaOne_PlayerFullyIgnored()
         {
             // narrative テスト: α=1.0 で player 完全無視
-            var converter = new KnnVcConverter { TopK = 4 };
+            using var converter = new KnnVcConverter { TopK = 4 };
 
             using var query = MakeUniformTensor(1, 1024, value: 1.0f);
 
@@ -140,7 +140,7 @@ namespace VoiceHorror.KnnVc.Tests.EditMode
         public void C3_Convert_QueryFromMatchingSetSubset_RecoversNearIdentity()
         {
             // matching set の subset を query にしたら output ≈ query になるはず
-            var converter = new KnnVcConverter { TopK = 4 };
+            using var converter = new KnnVcConverter { TopK = 4 };
 
             using var ms = MakeRandomTensor(100, 1024, seed: 42);
             float[] msFlat = ms.DownloadToArray();

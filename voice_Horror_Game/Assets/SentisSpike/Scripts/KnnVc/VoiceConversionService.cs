@@ -200,8 +200,10 @@ namespace VoiceHorror.KnnVc
             _disposed = true;
             _extractor?.Dispose();
             _vocoder?.Dispose();
+            _converter?.Dispose();
             _extractor = null;
             _vocoder = null;
+            _converter = null;
         }
 
         void OnDestroy()
