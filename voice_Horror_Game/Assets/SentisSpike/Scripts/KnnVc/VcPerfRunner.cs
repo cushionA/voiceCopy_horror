@@ -243,19 +243,28 @@ namespace VoiceHorror.KnnVc
             }
             sw.Stop();
 
-            if (saveWavTo != null && outClip != null)
+            try
             {
-                try
+                if (saveWavTo != null && outClip != null)
                 {
-                    WavWriter.Save(saveWavTo, outClip);
-                    Debug.Log($"[VcPerfRunner] saved {saveWavTo}");
+                    try
+                    {
+                        WavWriter.Save(saveWavTo, outClip);
+                        Debug.Log($"[VcPerfRunner] saved {saveWavTo}");
+                    }
+                    catch (System.Exception ex)
+                    {
+                        Debug.LogError($"[VcPerfRunner] WAV save FAILED: {ex.Message}");
+                    }
                 }
-                catch (System.Exception ex)
-                {
-                    Debug.LogError($"[VcPerfRunner] WAV save FAILED: {ex.Message}");
-                }
+                recordTo?.Invoke(sw.Elapsed.TotalMilliseconds);
             }
-            recordTo?.Invoke(sw.Elapsed.TotalMilliseconds);
+            finally
+            {
+                // batch 40 件で AudioClip がメモリ常駐しないよう即解放。
+                // (Unity の GC は MonoBehaviour 派生 Object には効かないため明示破棄が必要)
+                if (outClip != null) UnityEngine.Object.Destroy(outClip);
+            }
         }
 
         string SaveCsv()

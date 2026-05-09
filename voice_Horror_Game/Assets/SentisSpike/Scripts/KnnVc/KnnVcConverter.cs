@@ -25,7 +25,6 @@
 using System;
 using Unity.InferenceEngine;
 using Unity.Profiling;
-using UnityEngine;
 
 namespace VoiceHorror.KnnVc
 {
@@ -46,6 +45,13 @@ namespace VoiceHorror.KnnVc
         int _cachedN2 = -1;
         int _cachedDim = -1;
         bool _disposed;
+
+        // 自前 alloc する配列のうち、内部使用のみのものはフィールドキャッシュで GC 圧を回避。
+        // - topkIndices: 内部使用のみ → キャッシュ可
+        // - outFlat: 戻り値 Tensor が所有 → 次回呼出で破壊されるため毎回 alloc 必須
+        // - distFlat / ms: Sentis DownloadToArray() の戻り値 (destination 受取オーバーロード無し)
+        //                  のため毎回 alloc 不可避
+        int[] _topkIndicesCache;
 
         /// <summary>
         /// query [N1, 1024] と matching set [N2, 1024] から kNN マッチして
@@ -88,11 +94,16 @@ namespace VoiceHorror.KnnVc
             using (s_MarkerGpuDist.Auto())
             {
                 EnsureModel(n1, n2, dim);
-                _worker.SetInput(0, query);
-                _worker.SetInput(1, matchingSet);
+                _worker.SetInput("q",  query);
+                _worker.SetInput("ms", matchingSet);
                 _worker.Schedule();
-                using var distTensor = (_worker.PeekOutput() as Tensor<float>).ReadbackAndClone();
-                distFlat = distTensor.DownloadToArray();
+
+                // Worker の output tensor から直接 DownloadToArray (内部で同期 readback)。
+                // 旧実装は ReadbackAndClone (Tensor 確保 ~10MB) → DownloadToArray (float[] ~10MB)
+                // で二重 alloc していたが、distFlat だけあれば良いため Tensor 確保を省略。
+                var output = _worker.PeekOutput() as Tensor<float>;
+                output.CompleteAllPendingOperations();
+                distFlat = output.DownloadToArray();
             }
 
             // ms は CPU 側で平均計算に必要なので 1 回だけ download
@@ -100,7 +111,10 @@ namespace VoiceHorror.KnnVc
 
             // Step 2 (Pass 1): top-K インデックス算出 (重みつき除外もここで)
             // Profiler マーカーが互いにネストしないよう、TopK と Average を 2 パスに分離。
-            int[] topkIndicesAll = new int[n1 * k];
+            int topkLen = n1 * k;
+            if (_topkIndicesCache == null || _topkIndicesCache.Length < topkLen)
+                _topkIndicesCache = new int[topkLen];
+            int[] topkIndicesAll = _topkIndicesCache;
             using (s_MarkerTopK.Auto())
             {
                 int[] topkIdx = new int[k];
@@ -139,7 +153,9 @@ namespace VoiceHorror.KnnVc
                 }
             }
 
-            // Step 3 (Pass 2): top-K インデックスから ms 行を平均
+            // Step 3 (Pass 2): top-K インデックスから ms 行を平均。
+            // 戻り値の Tensor が outFlat を所有するため、毎回 alloc 必須
+            // (フィールドキャッシュにすると次回呼出で前回戻り値が破壊される)
             float[] outFlat = new float[n1 * dim];
             using (s_MarkerAverage.Auto())
             {
@@ -187,11 +203,13 @@ namespace VoiceHorror.KnnVc
             var qIn = graph.AddInput<float>(new TensorShape(n1, dim), "q");
             var msIn = graph.AddInput<float>(new TensorShape(n2, dim), "ms");
 
-            // L2 正規化 (per row)
-            var qL2 = Functional.ReduceL2(qIn, dim: 1, keepdim: true);   // [N1, 1]
-            var qN = Functional.Div(qIn, qL2);                            // [N1, dim]
-            var msL2 = Functional.ReduceL2(msIn, dim: 1, keepdim: true);
-            var msN = Functional.Div(msIn, msL2);
+            // L2 正規化 (per row)。0 ベクトル (無音入力) で NaN にならないよう
+            // ノルムに極小の eps を加算してから割る (旧 C# 実装の Math.Max(norm, 1e-12f) 相当)
+            var eps = Functional.Constant(1e-12f);
+            var qL2 = Functional.Add(Functional.ReduceL2(qIn, dim: 1, keepdim: true), eps);  // [N1, 1]
+            var qN  = Functional.Div(qIn, qL2);                                              // [N1, dim]
+            var msL2 = Functional.Add(Functional.ReduceL2(msIn, dim: 1, keepdim: true), eps);
+            var msN  = Functional.Div(msIn, msL2);
 
             // sim = qN @ msN.T   → [N1, N2]
             var msNT = Functional.Transpose(msN, 0, 1);                   // [dim, N2]

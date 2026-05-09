@@ -1,6 +1,23 @@
 // Eval body for unicli Eval — VcPerfTest シーンを自動構築
-// 実行: unicli exec Eval --code "@tools/build_vc_perf_scene.cs" 等の方法で渡す。
-// (本ファイルは Assets/ 外なので Unity コンパイル対象外)
+//
+// 用途:
+//   `voice_Horror_Game/Assets/SentisSpike/VcPerfTest.unity` を再構築する際に
+//   unicli Eval 経由で実行するスニペット。シーンを誤削除した / 別環境でセットアップ
+//   し直したい場合などに使う。通常運用では既存の .unity ファイルを使えば良い。
+//
+// 実行方法 (cwd = voice_Horror_Game):
+//   unicli exec Eval --code "$(cat ../tools/build_vc_perf_scene.cs)" \
+//     --declarations "using Unity.InferenceEngine; using VoiceHorror.KnnVc;"
+//
+// 動作:
+//   1. 新規シーン生成 (Camera + Directional Light)
+//   2. wavlm_large_layer6 / hifigan_wavlm_layer6 を auto-find
+//   3. my_sampleVoice (target) と 107 / 10 / 2 / 86 (sources) を auto-find
+//   4. VoiceConversionService GameObject に ModelAsset 2 個をバインド
+//   5. VcPerfRunner GameObject に service / target / sources / batchIterations をバインド
+//   6. Assets/SentisSpike/VcPerfTest.unity に保存
+//
+// 本ファイルは Assets/ 外なので Unity コンパイル対象外 (.cs だが .csproj に含まれない)
 
 ModelAsset FindModel(string n)
 {
