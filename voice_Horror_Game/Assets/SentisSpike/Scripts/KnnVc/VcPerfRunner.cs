@@ -2,17 +2,18 @@
 // voice_horror Phase 8 (2026-05-09)
 //
 // Goal:
-//   PlayMode シーンで kNN-VC の変換負荷をホットキー駆動で観察する。
+//   PlayMode シーンで kNN-VC の変換負荷を自動シーケンスで観察する。
 //   段階別の細かい内訳は Unity Profiler の ProfilerMarker (VC.Total /
 //   VC.Extract / VC.kNN / VC.Vocode) で見る。本 Runner は IMGUI 上に
-//   total elapsed の集計だけを出す。
+//   2 段階 (warmup / steady) の集計を出し、終了時に CSV を自動書き出す。
 //
-// 操作:
-//   起動 (Play) → 自動で Initialize + Warmup + TargetPool 構築
-//   キー [Alpha1..Alpha4] : sources[i] を 1 回変換
-//   キー [B]              : sources を順に N 回ループ変換 (バッチ)
-//   キー [R]              : 統計リセット
-//   キー [S]              : CSV 書き出し (VcTestOutput/perf_{timestamp}.csv)
+// シーケンス (Play 押下時に自動進行):
+//   1. Initialize + WarmupAsync (extractor / vocoder のカーネル JIT)
+//   2. TargetPool 構築 (target AudioClip → WavLM forward → pool)
+//   3. Warmup 変換: sources[0] を 1 回 (kNN 経路の cold start 解消、stats には記録しない)
+//   4. Single pass: 各 source × 1 回 (stats=single)
+//   5. Batch: batchIterations × sources (stats=batch)
+//   6. CSV 自動保存
 //
 // Profiler 使い方:
 //   Window > Analysis > Profiler を開いて Editor 接続のまま Play。
@@ -25,7 +26,6 @@ using System.IO;
 using System.Text;
 using Unity.Profiling;
 using UnityEngine;
-using UnityEngine.InputSystem;
 using Debug = UnityEngine.Debug;
 
 namespace VoiceHorror.KnnVc
@@ -40,27 +40,18 @@ namespace VoiceHorror.KnnVc
         [Header("Audio Inputs")]
         [Tooltip("起動時に TargetPool に流し込む声 (少女声優想定)")]
         [SerializeField] AudioClip targetClip;
-        [Tooltip("変換対象 source clip (キー 1..4 に対応、最大 4 個)")]
+        [Tooltip("変換対象 source clip (順に処理。null は skip)")]
         [SerializeField] AudioClip[] sources = new AudioClip[4];
 
-        [Header("Batch")]
-        [Tooltip("キー [B] でバッチ実行する反復回数 (sources を順番に回す)")]
+        [Header("Run")]
+        [Tooltip("バッチ反復回数 (sources を順に何セット回すか)")]
         [SerializeField] int batchIterations = 10;
 
         [Tooltip("変換 alpha (1.0 = target only)")]
         [Range(0f, 1f)]
         [SerializeField] float alpha = 1.0f;
 
-        [Header("Output")]
-        [Tooltip("変換結果を AudioSource で再生するか (耳で確認用)")]
-        [SerializeField] bool playOutput;
-        [SerializeField] AudioSource audioSource;
-
-        [Header("Auto-run")]
-        [Tooltip("Start 後すぐにバッチを 1 回流す (Profiler attach 観察用)")]
-        [SerializeField] bool autoRunOnStart;
-
-        // ── Stats (total only。段階別は Profiler 側で見る) ──────────────
+        // ── Stats ───────────────────────────────────────────────────────
         struct StageStats
         {
             public int count;
@@ -100,10 +91,9 @@ namespace VoiceHorror.KnnVc
             }
         }
 
-        StageStats _total = StageStats.New();
+        StageStats _single = StageStats.New();
+        StageStats _batch  = StageStats.New();
 
-        bool _ready;
-        bool _busy;
         string _statusLine = "(initializing)";
 
         // ── Lifecycle ───────────────────────────────────────────────────
@@ -117,92 +107,106 @@ namespace VoiceHorror.KnnVc
                 yield break;
             }
 
+            _statusLine = "Initialize + Warmup...";
+            yield return null;
             service.Initialize();
             yield return service.WarmupAsync();
 
-            if (targetClip != null)
+            if (targetClip == null)
             {
-                _statusLine = $"Building target pool from {targetClip.name}...";
-                var sw = Stopwatch.StartNew();
-                service.AccumulateTargetVoice(targetClip);
-                sw.Stop();
-                Debug.Log($"[VcPerfRunner] TargetPool built: {service.TargetPool.FrameCount} frames in {sw.ElapsedMilliseconds}ms");
-            }
-            else
-            {
-                Debug.LogWarning("[VcPerfRunner] targetClip not assigned, conversions will fail");
-            }
-
-            _ready = true;
-            _statusLine = $"Ready. TargetPool={service.TargetPool.FrameCount}f. [1..4] convert  [B] batch  [R] reset  [S] save";
-
-            if (autoRunOnStart)
-                StartCoroutine(RunBatch());
-        }
-
-        void Update()
-        {
-            if (!_ready || _busy) return;
-
-            var kb = Keyboard.current;
-            if (kb == null) return; // headless 等で keyboard 無し
-
-            if (kb.digit1Key.wasPressedThisFrame) ConvertOne(0);
-            if (kb.digit2Key.wasPressedThisFrame) ConvertOne(1);
-            if (kb.digit3Key.wasPressedThisFrame) ConvertOne(2);
-            if (kb.digit4Key.wasPressedThisFrame) ConvertOne(3);
-            if (kb.bKey.wasPressedThisFrame)      StartCoroutine(RunBatch());
-            if (kb.rKey.wasPressedThisFrame)      ResetStats();
-            if (kb.sKey.wasPressedThisFrame)      SaveCsv();
-        }
-
-        // ── Operations ──────────────────────────────────────────────────
-
-        void ConvertOne(int sourceIndex)
-        {
-            if (sourceIndex < 0 || sourceIndex >= sources.Length || sources[sourceIndex] == null)
-            {
-                _statusLine = $"sources[{sourceIndex}] is null";
-                return;
-            }
-            ConvertClipMeasured(sources[sourceIndex]);
-        }
-
-        IEnumerator RunBatch()
-        {
-            if (sources == null || sources.Length == 0)
-            {
-                _statusLine = "no sources to batch";
+                _statusLine = "ERROR: targetClip is not assigned";
+                Debug.LogError("[VcPerfRunner] targetClip not assigned");
                 yield break;
             }
 
-            _busy = true;
-            _statusLine = $"Batch x{batchIterations}...";
-            int totalRun = 0;
+            _statusLine = $"Building target pool from {targetClip.name}...";
+            yield return null;
+            var swPool = Stopwatch.StartNew();
+            service.AccumulateTargetVoice(targetClip);
+            swPool.Stop();
+            Debug.Log($"[VcPerfRunner] TargetPool built: {service.TargetPool.FrameCount} frames in {swPool.ElapsedMilliseconds}ms");
+
+            yield return RunFullSequence();
+        }
+
+        IEnumerator RunFullSequence()
+        {
+            // (a) Warmup conversion: kNN/vocode 経路の cold start を吸収。stats には記録しない。
+            AudioClip firstSource = FindFirstNonNull();
+            if (firstSource == null)
+            {
+                _statusLine = "ERROR: no non-null sources";
+                yield break;
+            }
+            _statusLine = $"Warmup convert (discarded): {firstSource.name}";
+            yield return null;
+            ConvertClip(firstSource, recordTo: null);
+            yield return null;
+
+            // (b) Single pass: 各 source × 1
+            int singleCount = 0;
+            for (int i = 0; i < sources.Length; i++)
+            {
+                if (sources[i] == null) continue;
+                _statusLine = $"Single pass [{singleCount + 1}/{NonNullSourceCount()}]: {sources[i].name}";
+                yield return null;
+                ConvertClip(sources[i], recordTo: SingleRef);
+                singleCount++;
+                yield return null;
+            }
+
+            // (c) Batch: batchIterations × sources
+            int total = batchIterations * NonNullSourceCount();
+            int run = 0;
             for (int iter = 0; iter < batchIterations; iter++)
             {
                 for (int i = 0; i < sources.Length; i++)
                 {
                     if (sources[i] == null) continue;
-                    ConvertClipMeasured(sources[i]);
-                    totalRun++;
-                    yield return null; // 1 frame 譲ってフリーズ感を抑える
+                    run++;
+                    _statusLine = $"Batch [{run}/{total}]: {sources[i].name} (iter {iter + 1}/{batchIterations})";
+                    ConvertClip(sources[i], recordTo: BatchRef);
+                    yield return null;
                 }
             }
-            _busy = false;
-            _statusLine = $"Batch done: {totalRun} runs. mean={_total.MeanMs:F0}ms p95={_total.P95Ms:F0}ms";
+
+            // (d) CSV 自動保存
+            string csv = SaveCsv();
+
+            _statusLine =
+                $"DONE. single n={_single.count} mean={_single.MeanMs:F0}ms p95={_single.P95Ms:F0}ms / " +
+                $"batch n={_batch.count} mean={_batch.MeanMs:F0}ms p95={_batch.P95Ms:F0}ms";
+            Debug.Log($"[VcPerfRunner] {_statusLine}\n[VcPerfRunner] CSV: {csv}");
         }
 
-        /// <summary>
-        /// 1 回の変換を計測。total elapsed のみ記録。段階内訳は Profiler で見る。
-        /// </summary>
-        void ConvertClipMeasured(AudioClip clip)
+        // ── Helpers ─────────────────────────────────────────────────────
+
+        // recordTo は ref への delegate 代わりに「どっちに記録するか」を選ぶフラグ
+        // (struct は ref で渡せないので、明示的に代入する小さなコールバック)
+        delegate void StatsRef(double ms);
+        void SingleRef(double ms) => _single.Record(ms);
+        void BatchRef(double ms)  => _batch.Record(ms);
+
+        AudioClip FindFirstNonNull()
+        {
+            for (int i = 0; i < sources.Length; i++)
+                if (sources[i] != null) return sources[i];
+            return null;
+        }
+
+        int NonNullSourceCount()
+        {
+            int c = 0;
+            for (int i = 0; i < sources.Length; i++) if (sources[i] != null) c++;
+            return c;
+        }
+
+        void ConvertClip(AudioClip clip, StatsRef recordTo)
         {
             var sw = Stopwatch.StartNew();
-            AudioClip outClip = null;
             try
             {
-                outClip = service.Convert(clip, alpha);
+                service.Convert(clip, alpha);
             }
             catch (System.Exception ex)
             {
@@ -210,22 +214,10 @@ namespace VoiceHorror.KnnVc
                 return;
             }
             sw.Stop();
-            _total.Record(sw.Elapsed.TotalMilliseconds);
-
-            if (playOutput && audioSource != null && outClip != null)
-                audioSource.PlayOneShot(outClip);
-            // outClip は Unity の GC + AudioClip の lifecycle に任せる
+            recordTo?.Invoke(sw.Elapsed.TotalMilliseconds);
         }
 
-        // ── Reset / Save ─────────────────────────────────────────────────
-
-        void ResetStats()
-        {
-            _total = StageStats.New();
-            _statusLine = "stats reset";
-        }
-
-        void SaveCsv()
+        string SaveCsv()
         {
             string repoRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..", ".."));
             string outDir = Path.Combine(repoRoot, "VcTestOutput");
@@ -236,61 +228,49 @@ namespace VoiceHorror.KnnVc
             var sb = new StringBuilder();
             sb.AppendLine("# kNN-VC Perf Runner — total elapsed only (per-stage breakdown via Profiler ProfilerMarker)");
             sb.AppendLine("stage,count,mean_ms,min_ms,max_ms,p95_ms");
-            sb.AppendLine($"total,{_total.count},{_total.MeanMs:F2},{_total.minMs:F2},{_total.maxMs:F2},{_total.P95Ms:F2}");
-            // 個別サンプル (regression 解析しやすいよう全件出す)
+            sb.AppendLine($"single,{_single.count},{_single.MeanMs:F2},{_single.minMs:F2},{_single.maxMs:F2},{_single.P95Ms:F2}");
+            sb.AppendLine($"batch,{_batch.count},{_batch.MeanMs:F2},{_batch.minMs:F2},{_batch.maxMs:F2},{_batch.P95Ms:F2}");
             sb.AppendLine();
-            sb.AppendLine("idx,sample_ms");
-            for (int i = 0; i < _total.samples.Count; i++)
-                sb.AppendLine($"{i},{_total.samples[i]:F2}");
+            sb.AppendLine("stage,idx,sample_ms");
+            for (int i = 0; i < _single.samples.Count; i++) sb.AppendLine($"single,{i},{_single.samples[i]:F2}");
+            for (int i = 0; i < _batch.samples.Count; i++)  sb.AppendLine($"batch,{i},{_batch.samples[i]:F2}");
 
             File.WriteAllText(path, sb.ToString());
-            _statusLine = $"saved {path}";
-            Debug.Log($"[VcPerfRunner] CSV: {path}");
+            return path;
         }
 
         // ── IMGUI 表示 ───────────────────────────────────────────────────
 
-        // 大きめフォント (高解像度ディスプレイ対策)
         static GUIStyle s_labelStyle;
         static GUIStyle s_titleStyle;
-        static GUIStyle s_buttonStyle;
 
         static void EnsureStyles()
         {
             if (s_labelStyle == null)
             {
                 s_labelStyle = new GUIStyle(GUI.skin.label) { fontSize = 18 };
-                s_titleStyle = new GUIStyle(GUI.skin.box) { fontSize = 20, alignment = TextAnchor.UpperLeft, fontStyle = FontStyle.Bold };
-                s_buttonStyle = new GUIStyle(GUI.skin.button) { fontSize = 18 };
+                s_titleStyle = new GUIStyle(GUI.skin.box)
+                {
+                    fontSize = 20,
+                    alignment = TextAnchor.UpperLeft,
+                    fontStyle = FontStyle.Bold,
+                };
             }
         }
 
         void OnGUI()
         {
             EnsureStyles();
-            const int w = 880, h = 320;
+            const int w = 880, h = 240;
             const int pad = 18;
-            GUI.Box(new Rect(10, 10, w, h), "kNN-VC Perf Runner — per-stage breakdown: Profiler 'VC.*' markers", s_titleStyle);
+            GUI.Box(new Rect(10, 10, w, h), "kNN-VC Perf Runner — Profiler の 'VC.*' マーカーで段階別を見る", s_titleStyle);
 
             int y = 56;
-            GUI.Label(new Rect(pad + 10, y, w - pad * 2, 28), _statusLine, s_labelStyle); y += 32;
-            GUI.Label(new Rect(pad + 10, y, w - pad * 2, 28), "[1..4] convert   [B] batch   [R] reset   [S] save CSV", s_labelStyle); y += 36;
-
-            // ボタン
-            int bx = pad + 10;
-            int bw = 60;
-            int bh = 32;
-            if (GUI.Button(new Rect(bx, y, bw, bh), "1", s_buttonStyle)) ConvertOne(0); bx += bw + 6;
-            if (GUI.Button(new Rect(bx, y, bw, bh), "2", s_buttonStyle)) ConvertOne(1); bx += bw + 6;
-            if (GUI.Button(new Rect(bx, y, bw, bh), "3", s_buttonStyle)) ConvertOne(2); bx += bw + 6;
-            if (GUI.Button(new Rect(bx, y, bw, bh), "4", s_buttonStyle)) ConvertOne(3); bx += bw + 16;
-            if (GUI.Button(new Rect(bx, y, 110, bh), "Batch", s_buttonStyle) && !_busy) StartCoroutine(RunBatch()); bx += 116;
-            if (GUI.Button(new Rect(bx, y, 90,  bh), "Reset", s_buttonStyle)) ResetStats(); bx += 96;
-            if (GUI.Button(new Rect(bx, y, 130, bh), "Save CSV", s_buttonStyle)) SaveCsv();
-            y += bh + 14;
+            GUI.Label(new Rect(pad + 10, y, w - pad * 2, 28), _statusLine, s_labelStyle); y += 36;
 
             DrawHeader(y); y += 30;
-            DrawRow(y, "total", _total);
+            DrawRow(y, "single", _single); y += 28;
+            DrawRow(y, "batch",  _batch);
         }
 
         static void DrawHeader(int y)
@@ -298,10 +278,10 @@ namespace VoiceHorror.KnnVc
             const int x0 = 28;
             GUI.Label(new Rect(x0,        y, 110, 26), "stage", s_labelStyle);
             GUI.Label(new Rect(x0 + 130,  y, 100, 26), "count", s_labelStyle);
-            GUI.Label(new Rect(x0 + 240,  y, 130, 26), "mean", s_labelStyle);
-            GUI.Label(new Rect(x0 + 380,  y, 130, 26), "min", s_labelStyle);
-            GUI.Label(new Rect(x0 + 520,  y, 130, 26), "max", s_labelStyle);
-            GUI.Label(new Rect(x0 + 660,  y, 130, 26), "p95", s_labelStyle);
+            GUI.Label(new Rect(x0 + 240,  y, 130, 26), "mean",  s_labelStyle);
+            GUI.Label(new Rect(x0 + 380,  y, 130, 26), "min",   s_labelStyle);
+            GUI.Label(new Rect(x0 + 520,  y, 130, 26), "max",   s_labelStyle);
+            GUI.Label(new Rect(x0 + 660,  y, 130, 26), "p95",   s_labelStyle);
         }
 
         static void DrawRow(int y, string label, StageStats s)
