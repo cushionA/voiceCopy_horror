@@ -134,6 +134,18 @@ namespace VoiceHorror.KnnVc
         }
 
         /// <summary>
+        /// プールの全 frame と weight を破棄して空に戻す。
+        /// 量子化比較ランナー等で同一 service を別 target で使い回す用途。
+        /// 内部キャッシュ配列は Clear せず length 0 として再利用 (次回 Append で再 alloc 回避)。
+        /// </summary>
+        public void Clear()
+        {
+            _features.Clear();
+            _weights.Clear();
+            InvalidateCache();
+        }
+
+        /// <summary>
         /// npy 形式で永続化。features → path、weights → path に "_weights" suffix。
         /// </summary>
         public void SaveTo(string path)
