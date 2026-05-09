@@ -152,3 +152,5 @@ VcTestOutput/
 # E2E Tester / PerfRunner が TestSounds に出す変換結果も追跡しない
 voice_Horror_Game/Assets/SentisSpike/TestSounds/knn_vc_output.wav
 voice_Horror_Game/Assets/SentisSpike/TestSounds/knn_vc_output.wav.meta
+# Unity Profiler キャプチャ (.data 100MB+ / .highlights / .png / .bc7)
+voice_Horror_Game/ProfilerCaptures/
