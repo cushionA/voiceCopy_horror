@@ -10,8 +10,10 @@
 //   5. Play モードで Inspector の「変換実行」ボタンを押す
 //   6. Console でタイムログを確認、Output Source から変換済み音声が再生される
 
+using System;
 using System.Collections;
 using System.Diagnostics;
+using System.IO;
 using UnityEngine;
 using Debug = UnityEngine.Debug;
 
@@ -43,6 +45,17 @@ namespace VoiceHorror.VC
         [Header("Settings")]
         [Tooltip("Start() で自動変換を走らせる (Scene 起動直後にテストしたい場合)")]
         public bool convertOnStart;
+
+        [Header("Hift Only Mode (Phase 3.5 検証)")]
+        [Tooltip("DiT をバイパスし source acoustic mel をそのまま hift に通す。声質変換無しだが mel 抽出 + hift 単体の品質を聴感確認できる。Target Ref Clip は不要。")]
+        public bool hiftOnlyMode;
+
+        [Header("Debug Output")]
+        [Tooltip("出力 WAV と中間 mel を保存するルートディレクトリ (project root 相対 or 絶対)。空欄=保存しない")]
+        public string saveDirectory = "VcDebugOut";
+
+        [Tooltip("source_mel.npy / mu.npy / dit_out_mel.npy も保存する (Python 比較用)")]
+        public bool dumpIntermediates = true;
 
         [Header("Debug (read-only)")]
         [Tooltip("直近の変換時間 (ms)")]
@@ -83,7 +96,22 @@ namespace VoiceHorror.VC
                 Debug.LogWarning("[Bench] Play モードで実行してください。");
                 return;
             }
-            StartCoroutine(ConvertCoroutine());
+            if (hiftOnlyMode)
+                StartCoroutine(HiftOnlyCoroutine());
+            else
+                StartCoroutine(ConvertCoroutine());
+        }
+
+        /// <summary>hift 単体実行 — DiT バイパス。Target Ref Clip 不要。</summary>
+        [ContextMenu("hift 単体実行 (DiT バイパス)")]
+        public void TriggerHiftOnly()
+        {
+            if (!Application.isPlaying)
+            {
+                Debug.LogWarning("[Bench] Play モードで実行してください。");
+                return;
+            }
+            StartCoroutine(HiftOnlyCoroutine());
         }
 
         /// <summary>Target Embedding だけ先に抽出してキャッシュする。</summary>
@@ -115,13 +143,27 @@ namespace VoiceHorror.VC
             }
 
             // Step 2: VC 変換 (GPU forward × ODE steps)
+            // Note: dumpIntermediates 有効時は ConvertVoice (同期版) を使う。
+            //       ConvertVoiceAsync は中間キャプチャに対応していないため。
             Debug.Log($"[Bench] 変換開始: source={sourceClip.name} ({sourceClip.length:F2}s) → target={targetRefClip.name}");
 
             AudioClip result = null;
             Stopwatch sw = Stopwatch.StartNew();
 
-            yield return StartCoroutine(
-                pipeline.ConvertVoiceAsync(sourceClip, _cachedTargetEmb, clip => result = clip));
+            bool wantDump = !string.IsNullOrEmpty(saveDirectory);
+            pipeline.captureDebug = wantDump;
+
+            if (wantDump)
+            {
+                // 同期版で中間結果をキャプチャ
+                result = pipeline.ConvertVoice(sourceClip, _cachedTargetEmb);
+                yield return null;
+            }
+            else
+            {
+                yield return StartCoroutine(
+                    pipeline.ConvertVoiceAsync(sourceClip, _cachedTargetEmb, clip => result = clip));
+            }
 
             sw.Stop();
             lastConvertMs = sw.ElapsedMilliseconds;
@@ -135,7 +177,147 @@ namespace VoiceHorror.VC
 
             Debug.Log($"[Bench] 変換完了: {lastConvertMs}ms → {result.length:F2}s @ {result.frequency}Hz");
 
-            // Step 3: 再生
+            // Step 3: 結果をディスクに保存 (WAV + 中間 mel)
+            if (wantDump)
+                SaveDebugDump(result);
+
+            // Step 4: 再生
+            if (playOnConvert && outputSource != null)
+            {
+                outputSource.clip = result;
+                outputSource.Play();
+            }
+        }
+
+        // ── Debug dump ────────────────────────────────────────────────────
+
+        void SaveDebugDump(AudioClip result)
+        {
+            try
+            {
+                string root = Path.IsPathRooted(saveDirectory)
+                    ? saveDirectory
+                    : Path.Combine(Application.dataPath, "..", saveDirectory);
+                string stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                string outDir = Path.Combine(root, stamp);
+                Directory.CreateDirectory(outDir);
+
+                // 1. 出力 WAV
+                string outWav = Path.Combine(outDir, "output.wav");
+                WavWriter.Save(outWav, result);
+                Debug.Log($"[Bench] 出力 WAV: {outWav}  ({result.length:F2}s, {result.frequency}Hz)");
+
+                if (dumpIntermediates && pipeline.lastCapture != null)
+                {
+                    var c = pipeline.lastCapture;
+
+                    // 入力 24kHz audio
+                    if (c.audio24k != null)
+                    {
+                        WavWriter.Save(Path.Combine(outDir, "input_24k.wav"), c.audio24k, 24000);
+                        NpyWriter.Save(Path.Combine(outDir, "input_24k.npy"), c.audio24k);
+                    }
+
+                    // source acoustic mel [80, T_src] — Python 側 matcha mel と要素比較する対象
+                    if (c.sourceMel80xT != null)
+                        NpyWriter.Save(Path.Combine(outDir, "source_mel.npy"), c.sourceMel80xT);
+
+                    // PadOrTruncate 後の mu (DiT 入力) [80, 100]
+                    if (c.mu80x100 != null)
+                        NpyWriter.Save(Path.Combine(outDir, "mu.npy"), c.mu80x100);
+
+                    // DiT 出力 mel (生 [80*100] flat)
+                    if (c.ditOutMelFlat != null)
+                        NpyWriter.Save(Path.Combine(outDir, "dit_out_mel.npy"),
+                                       c.ditOutMelFlat, new[] { 80, 100 });
+
+                    // hift 出力 audio (raw float)
+                    if (c.hiftOutAudio != null)
+                        NpyWriter.Save(Path.Combine(outDir, "hift_out.npy"), c.hiftOutAudio);
+
+                    // speaker projection (80)
+                    if (c.spks80 != null)
+                        NpyWriter.Save(Path.Combine(outDir, "spks80.npy"), c.spks80);
+
+                    // メタ情報
+                    string meta =
+                        $"source_clip      = {sourceClip?.name} ({sourceClip?.length:F2}s @ {sourceClip?.frequency}Hz)\n" +
+                        $"target_ref_clip  = {targetRefClip?.name} ({targetRefClip?.length:F2}s @ {targetRefClip?.frequency}Hz)\n" +
+                        $"input_24k_len    = {c.audio24k?.Length}\n" +
+                        $"source_mel_T     = {c.sourceMel80xT?.GetLength(1)}\n" +
+                        $"mu_shape         = (80, 100)\n" +
+                        $"dit_out_validT   = {c.ditOutMelValidT}\n" +
+                        $"hift_out_samples = {c.hiftOutAudio?.Length} ({(c.hiftOutAudio?.Length ?? 0) / (float)c.hiftSampleRate:F2}s @ {c.hiftSampleRate}Hz)\n" +
+                        $"ode_steps        = {pipeline.odeSteps}\n" +
+                        $"dit_seed         = {pipeline.ditSeed}\n";
+                    File.WriteAllText(Path.Combine(outDir, "meta.txt"), meta);
+
+                    Debug.Log($"[Bench] 中間 dump: {outDir}\n{meta}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[Bench] dump 失敗: {ex.Message}\n{ex.StackTrace}");
+            }
+            finally
+            {
+                pipeline.captureDebug = false;
+                pipeline.lastCapture  = null; // GC を促す
+            }
+        }
+
+        IEnumerator HiftOnlyCoroutine()
+        {
+            if (pipeline == null)
+            {
+                Debug.LogError("[Bench] VoiceConversionPipeline が見つかりません。");
+                yield break;
+            }
+            if (sourceClip == null)
+            {
+                Debug.LogError("[Bench] Source Clip が設定されていません。");
+                yield break;
+            }
+            if (pipeline.hiftModel == null)
+            {
+                Debug.LogError("[Bench] VoiceConversionPipeline.hiftModel が未設定です。");
+                yield break;
+            }
+
+            Debug.Log($"[Bench][HiftOnly] 実行: source={sourceClip.name} ({sourceClip.length:F2}s)  DiT バイパス");
+
+            bool wantDump = !string.IsNullOrEmpty(saveDirectory);
+            pipeline.captureDebug = wantDump;
+
+            AudioClip result = null;
+            Stopwatch sw = Stopwatch.StartNew();
+            try
+            {
+                result = pipeline.RunHiftOnly(sourceClip);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[Bench][HiftOnly] 実行失敗: {ex.Message}\n{ex.StackTrace}");
+            }
+            sw.Stop();
+            yield return null;
+
+            lastConvertMs = sw.ElapsedMilliseconds;
+            lastResult    = result;
+
+            if (result == null)
+            {
+                Debug.LogError("[Bench][HiftOnly] 結果が null です。Console を確認してください。");
+                pipeline.captureDebug = false;
+                pipeline.lastCapture  = null;
+                yield break;
+            }
+
+            Debug.Log($"[Bench][HiftOnly] 完了: {lastConvertMs}ms → {result.length:F2}s @ {result.frequency}Hz");
+
+            if (wantDump)
+                SaveDebugDump(result);
+
             if (playOnConvert && outputSource != null)
             {
                 outputSource.clip = result;

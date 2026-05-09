@@ -27,6 +27,19 @@ using Debug = UnityEngine.Debug;
 
 namespace VoiceHorror.VC
 {
+    /// <summary>VC 中間結果のスナップショット (Phase 3.5 ノイズ調査用)。</summary>
+    public class VcDebugCapture
+    {
+        public float[]   audio24k;          // resample 後の入力音声
+        public float[,]  sourceMel80xT;     // [80, T_src]  acoustic mel (PadOrTruncate 前)
+        public float[,]  mu80x100;          // [80, 100]    DiT mu 入力 (truncate 後)
+        public float[]   ditOutMelFlat;     // [80*100]     DiT 出力 mel (row-major)
+        public int       ditOutMelValidT;   // 有効 frame 数 (= min(T_src, 100))
+        public float[]   hiftOutAudio;      // [T_audio]    hift 出力 (24kHz)
+        public int       hiftSampleRate;
+        public float[]   spks80;            // [80]         投影後 speaker embedding
+    }
+
     public class VoiceConversionPipeline : MonoBehaviour
     {
         [Header("Models")]
@@ -66,6 +79,12 @@ namespace VoiceHorror.VC
 
         SpkEmbedProjection _projection;
         bool _initialized;
+
+        // ── Debug capture (Phase 3.5 ノイズ調査用) ────────────────────────
+        // captureDebug=true で ConvertVoice 実行時に直近の中間結果を保持する。
+        // Bench がこれを読んで .npy / .wav に書き出す。
+        [System.NonSerialized] public bool captureDebug;
+        [System.NonSerialized] public VcDebugCapture lastCapture;
 
         // ── Lifecycle ─────────────────────────────────────────────────────
 
@@ -167,6 +186,106 @@ namespace VoiceHorror.VC
             // ── Step 5: Build AudioClip ──────────────────────────────────
             AudioClip clip = AudioClip.Create("vc_output", audioOut.Length, 1, k_HiftSR, false);
             clip.SetData(audioOut, 0);
+
+            // ── Debug: 中間結果キャプチャ ────────────────────────────────
+            if (captureDebug)
+            {
+                lastCapture = new VcDebugCapture
+                {
+                    audio24k          = audio24k,
+                    sourceMel80xT     = acouMel,           // [80, T_src]
+                    mu80x100          = mu80x100,          // [80, 100] (DiT 入力)
+                    ditOutMelFlat     = melFlat,           // [80*100]
+                    ditOutMelValidT   = validT,
+                    hiftOutAudio      = audioOut,          // [T_audio]
+                    hiftSampleRate    = k_HiftSR,
+                    spks80            = spks80,
+                };
+            }
+
+            return clip;
+        }
+
+        // ── Hift-only mode (Phase 3.5 検証用) ─────────────────────────────
+        // DiT を完全にバイパスし、source acoustic mel をそのまま hift に通す。
+        // 声質変換は行わないが、mel 抽出 + hift 単体の品質を聴感確認できる。
+        // また、長さ問題 A (T=100 切断) の解決手段として「100-frame chunk loop」
+        // の実装習作にもなる (🅱 token encoder ルートでも流用可能)。
+        //
+        // 実装: source mel [80, T_src] を 100 frame ごとに分割 → 各 chunk を hift で
+        // vocode → 単純 concat。チャンク境界の連続性保証は行わない (初期検証目的)。
+        public AudioClip RunHiftOnly(AudioClip sourceClip)
+        {
+            if (sourceClip == null) { Debug.LogError("[VC] sourceClip is null"); return null; }
+            if (hiftModel == null)  { Debug.LogError("[VC] hiftModel is null"); return null; }
+
+            EnsureWorker(ref _hiftWorker, hiftModel, "hift");
+
+            var sw = Stopwatch.StartNew();
+
+            // ── Step 1: 音声 → acoustic mel [80, T_src] ─────────────────
+            float[] audio24k = GetAudio24k(sourceClip);
+            float[,] acouMel = MelExtractor.ExtractAcousticMel(audio24k);
+            int nMel   = acouMel.GetLength(0);
+            int totalT = acouMel.GetLength(1);
+            sw.Stop();
+            Debug.Log($"[VC][HiftOnly] mel ({nMel},{totalT}) extracted in {sw.ElapsedMilliseconds}ms; audio24k={audio24k.Length} samples");
+
+            // ── Step 2: 100-frame chunk に分割して hift へ ─────────────
+            const int chunkT    = 100;
+            int       numChunks = (totalT + chunkT - 1) / chunkT;
+            var       chunks    = new System.Collections.Generic.List<float[]>(numChunks);
+
+            sw.Restart();
+            for (int i = 0; i < numChunks; i++)
+            {
+                int start = i * chunkT;
+                int end   = Math.Min(start + chunkT, totalT);
+                int thisT = end - start;
+
+                // Flat [nMel * thisT], stride=thisT (RunHift が要求する形)
+                float[] flat = new float[nMel * thisT];
+                for (int m = 0; m < nMel; m++)
+                    for (int t = 0; t < thisT; t++)
+                        flat[m * thisT + t] = acouMel[m, start + t];
+
+                float[] audioOut = RunHift(flat, nMel, thisT);
+                chunks.Add(audioOut);
+            }
+            sw.Stop();
+            Debug.Log($"[VC][HiftOnly] {numChunks} chunks vocoded in {sw.ElapsedMilliseconds}ms");
+
+            // ── Step 3: concat ─────────────────────────────────────────
+            int totalSamples = 0;
+            foreach (var c in chunks) totalSamples += c.Length;
+            float[] full   = new float[totalSamples];
+            int     offset = 0;
+            foreach (var c in chunks)
+            {
+                Array.Copy(c, 0, full, offset, c.Length);
+                offset += c.Length;
+            }
+
+            AudioClip clip = AudioClip.Create("hift_only_output", full.Length, 1, k_HiftSR, false);
+            clip.SetData(full, 0);
+
+            // ── Debug capture (DiT 関連は null) ─────────────────────────
+            if (captureDebug)
+            {
+                lastCapture = new VcDebugCapture
+                {
+                    audio24k        = audio24k,
+                    sourceMel80xT   = acouMel,
+                    mu80x100        = null,
+                    ditOutMelFlat   = null,
+                    ditOutMelValidT = 0,
+                    hiftOutAudio    = full,
+                    hiftSampleRate  = k_HiftSR,
+                    spks80          = null,
+                };
+            }
+
+            Debug.Log($"[VC][HiftOnly] output: {full.Length} samples ({full.Length / (float)k_HiftSR:F2}s @ {k_HiftSR}Hz)");
             return clip;
         }
 
