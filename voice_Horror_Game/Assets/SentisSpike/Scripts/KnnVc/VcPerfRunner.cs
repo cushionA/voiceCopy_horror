@@ -26,6 +26,7 @@ using System.IO;
 using System.Text;
 using Unity.Profiling;
 using UnityEngine;
+using VoiceHorror.VC;
 using Debug = UnityEngine.Debug;
 
 namespace VoiceHorror.KnnVc
@@ -46,6 +47,10 @@ namespace VoiceHorror.KnnVc
         [Header("Run")]
         [Tooltip("バッチ反復回数 (sources を順に何セット回すか)")]
         [SerializeField] int batchIterations = 10;
+
+        [Header("Output")]
+        [Tooltip("Single pass の 4 変換結果を WAV 出力 (試聴用)。batch 40 件は出さない")]
+        [SerializeField] bool saveSinglePassWavs = true;
 
         [Tooltip("変換 alpha (1.0 = target only)")]
         [Range(0f, 1f)]
@@ -145,17 +150,20 @@ namespace VoiceHorror.KnnVc
             }
             _statusLine = $"Warmup convert (discarded): {firstSource.name}";
             yield return null;
-            ConvertClip(firstSource, recordTo: null);
+            ConvertClip(firstSource, recordTo: null, saveWavTo: null);
             yield return null;
 
-            // (b) Single pass: 各 source × 1
+            // (b) Single pass: 各 source × 1 (試聴用 WAV も保存)
             int singleCount = 0;
             for (int i = 0; i < sources.Length; i++)
             {
                 if (sources[i] == null) continue;
                 _statusLine = $"Single pass [{singleCount + 1}/{NonNullSourceCount()}]: {sources[i].name}";
                 yield return null;
-                ConvertClip(sources[i], recordTo: SingleRef);
+                string wavPath = saveSinglePassWavs
+                    ? BuildOutputWavPath(sources[i].name, singleCount)
+                    : null;
+                ConvertClip(sources[i], recordTo: SingleRef, saveWavTo: wavPath);
                 singleCount++;
                 yield return null;
             }
@@ -170,7 +178,7 @@ namespace VoiceHorror.KnnVc
                     if (sources[i] == null) continue;
                     run++;
                     _statusLine = $"Batch [{run}/{total}]: {sources[i].name} (iter {iter + 1}/{batchIterations})";
-                    ConvertClip(sources[i], recordTo: BatchRef);
+                    ConvertClip(sources[i], recordTo: BatchRef, saveWavTo: null);
                     yield return null;
                 }
             }
@@ -206,12 +214,27 @@ namespace VoiceHorror.KnnVc
             return c;
         }
 
-        void ConvertClip(AudioClip clip, StatsRef recordTo)
+        const int k_HiftSampleRate = 16000;
+        string _runTimestamp;
+
+        string BuildOutputWavPath(string sourceName, int idx)
+        {
+            if (_runTimestamp == null)
+                _runTimestamp = System.DateTime.Now.ToString("yyyyMMdd_HHmmss");
+
+            string repoRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..", ".."));
+            string outDir = Path.Combine(repoRoot, "VcTestOutput", $"perf_{_runTimestamp}");
+            Directory.CreateDirectory(outDir);
+            return Path.Combine(outDir, $"single_{idx:D2}_{sourceName}.wav");
+        }
+
+        void ConvertClip(AudioClip clip, StatsRef recordTo, string saveWavTo)
         {
             var sw = Stopwatch.StartNew();
+            AudioClip outClip = null;
             try
             {
-                service.Convert(clip, alpha);
+                outClip = service.Convert(clip, alpha);
             }
             catch (System.Exception ex)
             {
@@ -219,16 +242,30 @@ namespace VoiceHorror.KnnVc
                 return;
             }
             sw.Stop();
+
+            if (saveWavTo != null && outClip != null)
+            {
+                try
+                {
+                    WavWriter.Save(saveWavTo, outClip);
+                    Debug.Log($"[VcPerfRunner] saved {saveWavTo}");
+                }
+                catch (System.Exception ex)
+                {
+                    Debug.LogError($"[VcPerfRunner] WAV save FAILED: {ex.Message}");
+                }
+            }
             recordTo?.Invoke(sw.Elapsed.TotalMilliseconds);
         }
 
         string SaveCsv()
         {
+            if (_runTimestamp == null)
+                _runTimestamp = System.DateTime.Now.ToString("yyyyMMdd_HHmmss");
             string repoRoot = Path.GetFullPath(Path.Combine(Application.dataPath, "..", ".."));
-            string outDir = Path.Combine(repoRoot, "VcTestOutput");
+            string outDir = Path.Combine(repoRoot, "VcTestOutput", $"perf_{_runTimestamp}");
             Directory.CreateDirectory(outDir);
-            string ts = System.DateTime.Now.ToString("yyyyMMdd_HHmmss");
-            string path = Path.Combine(outDir, $"perf_{ts}.csv");
+            string path = Path.Combine(outDir, "perf.csv");
 
             var sb = new StringBuilder();
             sb.AppendLine("# kNN-VC Perf Runner — total elapsed only (per-stage breakdown via Profiler ProfilerMarker)");
