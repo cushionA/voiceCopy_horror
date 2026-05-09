@@ -128,3 +128,15 @@ voice_Horror_Game/Assets/Packages/
 # ---------------- Wave 5 Phase 24: compound auto-extract drafts ----------------
 docs/compound/_drafts/*.md
 !docs/compound/_drafts/.gitkeep
+
+# ---------------- Python / spike scratch ----------------
+__pycache__/
+*.pyc
+*.pyo
+
+# ---------------- Claude Code worktrees ----------------
+.claude/worktrees/
+
+# ---------------- Sentis/VC debug runtime output (npy / wav per run) ----------------
+voice_Horror_Game/VcDebugOut/
+voiceCoppy_test/sentis_spike/
