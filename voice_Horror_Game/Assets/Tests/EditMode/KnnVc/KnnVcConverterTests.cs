@@ -22,7 +22,7 @@ namespace VoiceHorror.KnnVc.Tests.EditMode
         [Test]
         public void C1_Convert_NoWeights_ReturnsCorrectShape()
         {
-            var converter = new KnnVcConverter { TopK = 4 };
+            using var converter = new KnnVcConverter { TopK = 4 };
 
             using var query = MakeRandomTensor(10, 1024, seed: 1);
             using var matchingSet = MakeRandomTensor(100, 1024, seed: 2);
@@ -46,7 +46,7 @@ namespace VoiceHorror.KnnVc.Tests.EditMode
         public void C1b_Convert_TopkAveraging_WorksCorrectly()
         {
             // matching set の特定 4 frame だけが query に近い場合、結果はその平均になるはず
-            var converter = new KnnVcConverter { TopK = 4 };
+            using var converter = new KnnVcConverter { TopK = 4 };
 
             // query = 全 1.0 / 全 0.0 等のシンプル
             using var query = MakeUniformTensor(1, 1024, value: 1.0f);
@@ -75,7 +75,7 @@ namespace VoiceHorror.KnnVc.Tests.EditMode
         [Test]
         public void C2_Convert_WithWeights_ZeroWeightFramesIgnored()
         {
-            var converter = new KnnVcConverter { TopK = 4 };
+            using var converter = new KnnVcConverter { TopK = 4 };
 
             // query = 全 1.0
             using var query = MakeUniformTensor(1, 1024, value: 1.0f);
@@ -108,7 +108,7 @@ namespace VoiceHorror.KnnVc.Tests.EditMode
         public void C2b_Convert_WithWeights_AlphaOne_PlayerFullyIgnored()
         {
             // narrative テスト: α=1.0 で player 完全無視
-            var converter = new KnnVcConverter { TopK = 4 };
+            using var converter = new KnnVcConverter { TopK = 4 };
 
             using var query = MakeUniformTensor(1, 1024, value: 1.0f);
 
@@ -140,7 +140,7 @@ namespace VoiceHorror.KnnVc.Tests.EditMode
         public void C3_Convert_QueryFromMatchingSetSubset_RecoversNearIdentity()
         {
             // matching set の subset を query にしたら output ≈ query になるはず
-            var converter = new KnnVcConverter { TopK = 4 };
+            using var converter = new KnnVcConverter { TopK = 4 };
 
             using var ms = MakeRandomTensor(100, 1024, seed: 42);
             float[] msFlat = ms.DownloadToArray();
@@ -165,6 +165,89 @@ namespace VoiceHorror.KnnVc.Tests.EditMode
                 Assert.Less(l1, 0.5f,
                     $"query[{q}] L1 distance to result should be small (got {l1})");
             }
+        }
+
+        // ── PR #6 review 反映: 追加カバレッジ ─────────────────────────
+
+        [Test]
+        public void C4_Convert_ZeroVectorQuery_DoesNotProduceNaN()
+        {
+            // 完全無音 (zero-pad された箇所など) でも NaN を出さない (Functional.Add eps 保護)
+            using var converter = new KnnVcConverter { TopK = 4 };
+
+            float[] zeroQuery = new float[1 * 1024]; // 全 0
+            using var query = new Tensor<float>(new TensorShape(1, 1024), zeroQuery);
+            using var ms = MakeRandomTensor(50, 1024, seed: 99);
+
+            using var result = converter.Convert(query, ms);
+            float[] r = result.DownloadToArray();
+            for (int i = 0; i < r.Length; i++)
+            {
+                Assert.IsFalse(float.IsNaN(r[i]), $"NaN at {i} (zero-vector query should not break)");
+                Assert.IsFalse(float.IsInfinity(r[i]), $"Inf at {i}");
+            }
+        }
+
+        [Test]
+        public void C5_Convert_ShapeChange_RebuildsModel()
+        {
+            // shape が変わった呼出で内部 Worker が再構築され、結果が壊れない
+            using var converter = new KnnVcConverter { TopK = 4 };
+
+            using (var q1 = MakeRandomTensor(5, 1024, seed: 1))
+            using (var ms1 = MakeRandomTensor(50, 1024, seed: 2))
+            using (var r1 = converter.Convert(q1, ms1))
+            {
+                Assert.AreEqual(new[] { 5, 1024 }, new[] { r1.shape[0], r1.shape[1] });
+            }
+
+            // shape を変えて再呼出 (n1, n2 ともに変化)
+            using (var q2 = MakeRandomTensor(8, 1024, seed: 3))
+            using (var ms2 = MakeRandomTensor(120, 1024, seed: 4))
+            using (var r2 = converter.Convert(q2, ms2))
+            {
+                Assert.AreEqual(new[] { 8, 1024 }, new[] { r2.shape[0], r2.shape[1] });
+                float[] arr = r2.DownloadToArray();
+                for (int i = 0; i < arr.Length; i++)
+                {
+                    Assert.IsFalse(float.IsNaN(arr[i]));
+                    Assert.IsFalse(float.IsInfinity(arr[i]));
+                }
+            }
+
+            // 元の shape に戻すと Worker キャッシュが再びヒット (動作確認のみ、性能は別途)
+            using (var q3 = MakeRandomTensor(5, 1024, seed: 5))
+            using (var ms3 = MakeRandomTensor(50, 1024, seed: 6))
+            using (var r3 = converter.Convert(q3, ms3))
+            {
+                Assert.AreEqual(new[] { 5, 1024 }, new[] { r3.shape[0], r3.shape[1] });
+            }
+        }
+
+        [Test]
+        public void C6_Convert_FieldCacheReuse_ProducesSameResult()
+        {
+            // フィールドキャッシュ (topkIndices) の再利用で同 shape 連続呼出の結果が等価
+            using var converter = new KnnVcConverter { TopK = 4 };
+
+            using var query = MakeUniformTensor(1, 1024, value: 1.0f);
+            float[] msFlat = new float[100 * 1024];
+            for (int i = 0; i < 4; i++)
+                for (int d = 0; d < 1024; d++) msFlat[i * 1024 + d] = 1.0f;
+            var rng = new System.Random(42);
+            for (int i = 4; i < 100; i++)
+                for (int d = 0; d < 1024; d++) msFlat[i * 1024 + d] = (float)(rng.NextDouble() * 2.0 - 1.0);
+            using var ms = new Tensor<float>(new TensorShape(100, 1024), msFlat);
+
+            // 1 回目
+            float[] r1;
+            using (var result1 = converter.Convert(query, ms)) r1 = result1.DownloadToArray();
+            // 2 回目 (キャッシュ再利用パス)
+            float[] r2;
+            using (var result2 = converter.Convert(query, ms)) r2 = result2.DownloadToArray();
+
+            for (int d = 0; d < 1024; d++)
+                Assert.AreEqual(r1[d], r2[d], 1e-5f, $"result[{d}] mismatched between 1st and 2nd call");
         }
 
         // ── Helpers ───────────────────────────────────────────────────

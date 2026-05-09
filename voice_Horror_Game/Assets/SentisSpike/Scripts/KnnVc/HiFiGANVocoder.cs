@@ -18,6 +18,7 @@
 
 using System;
 using Unity.InferenceEngine;
+using Unity.Profiling;
 
 namespace VoiceHorror.KnnVc
 {
@@ -26,6 +27,8 @@ namespace VoiceHorror.KnnVc
         const int k_FeatureDim = 1024;
         const float k_PeakNormalizeTarget = 0.95f;
         const int k_WarmupFrames = 250; // 5秒分
+
+        static readonly ProfilerMarker s_Marker = new ProfilerMarker("VC.Vocode");
 
         readonly Worker _worker;
         bool _disposed;
@@ -56,6 +59,7 @@ namespace VoiceHorror.KnnVc
                     $"got shape {features.shape}. " +
                     $"(HiFiGAN expects (B, T_frame, dim), not (B, dim, T_frame))");
 
+            using var _ = s_Marker.Auto();
             _worker.Schedule(features);
             using var output = (_worker.PeekOutput() as Tensor<float>).ReadbackAndClone();
 

@@ -16,6 +16,7 @@
 
 using System;
 using Unity.InferenceEngine;
+using Unity.Profiling;
 using UnityEngine;
 
 namespace VoiceHorror.KnnVc
@@ -32,6 +33,19 @@ namespace VoiceHorror.KnnVc
         // WavLM の receptive field を満たすための最小入力長 (0.1 秒 = 1600 samples)
         // これ未満は zero-pad して安全に forward させる (spec.md SR-* / 設計の堅牢化)
         const int k_MinAudioSamples = 1600;
+
+        // Sentis GPU compute dispatch limit 対策のチャンクサイズ。
+        // WavLM 第 1 conv (stride=5) の出力長が 65,535 を超えると thread group 上限を超え
+        // 特徴量が破損する (Pool / CopyOps の "Exceeded safe compute dispatch group count limit" 警告)。
+        // 安全マージンを取って 10 秒 = 160,000 samples → 第1 conv 出力 32,000 を上限とする。
+        // PyTorch では発生しないが Sentis の compute shader では必須の制限。
+        // 16 秒に拡張も試したが forward 回数削減効果は per-call overhead < compute で利得ほぼゼロ
+        // (35 秒 source で 220ms → 225ms、誤差範囲)。安全側の 10 秒に戻す (Phase 8 計測 2026-05-09)。
+        const int k_MaxChunkSamples = 160000; // 10 秒 @ 16kHz
+        // WavLM の出力 frame rate (16kHz / 320 stride = 50 fps)
+        const int k_StridePerFrame = 320;
+
+        static readonly ProfilerMarker s_Marker = new ProfilerMarker("VC.Extract");
 
         readonly Worker _worker;
         readonly BackendType _backend;
@@ -57,24 +71,93 @@ namespace VoiceHorror.KnnVc
             if (audio16kMono == null || audio16kMono.Length == 0)
                 throw new ArgumentException("audio is null or empty", nameof(audio16kMono));
 
-            // WavLM receptive field 確保のため、短すぎる入力は zero-pad
-            // (1600 samples = 0.1 秒 @ 16kHz、< これでは output frame 0 で空 Tensor 返り得る)
-            float[] audioForInput = audio16kMono;
-            if (audio16kMono.Length < k_MinAudioSamples)
+            using (s_Marker.Auto())
             {
-                audioForInput = new float[k_MinAudioSamples];
-                Array.Copy(audio16kMono, 0, audioForInput, 0, audio16kMono.Length);
-                // 残り (k_MinAudioSamples - audio16kMono.Length) は new float[] のデフォルト 0
+                // WavLM receptive field 確保のため、短すぎる入力は zero-pad
+                if (audio16kMono.Length < k_MinAudioSamples)
+                {
+                    var padded = new float[k_MinAudioSamples];
+                    Array.Copy(audio16kMono, 0, padded, 0, audio16kMono.Length);
+                    return ForwardSingle(padded);
+                }
+
+                if (audio16kMono.Length <= k_MaxChunkSamples)
+                    return ForwardSingle(audio16kMono);
+
+                return ForwardChunked(audio16kMono);
+            }
+        }
+
+        /// <summary>
+        /// 単一チャンクを forward。output 所有権は呼び出し側。
+        /// </summary>
+        Tensor<float> ForwardSingle(float[] audio)
+        {
+            using var input = new Tensor<float>(new TensorShape(1, audio.Length), audio);
+            _worker.Schedule(input);
+            return (_worker.PeekOutput() as Tensor<float>).ReadbackAndClone();
+        }
+
+        /// <summary>
+        /// 長尺 audio を k_MaxChunkSamples 単位で分割して forward し、
+        /// 出力 [1, T_frame, dim] を T_frame 軸で連結する。
+        ///
+        /// 注: WavLM transformer はチャンク内で global attention するため
+        /// チャンク境界の数 frame は連続 forward と微妙に異なる。
+        /// kNN-VC は per-frame マッチングなので品質影響は軽微。
+        /// </summary>
+        Tensor<float> ForwardChunked(float[] audio)
+        {
+            int totalSamples = audio.Length;
+            var chunkOutputs = new System.Collections.Generic.List<float[]>();
+            int dim = -1;
+            int totalFrames = 0;
+
+            int pos = 0;
+            while (pos < totalSamples)
+            {
+                int remaining = totalSamples - pos;
+                int chunkLen = Math.Min(k_MaxChunkSamples, remaining);
+
+                // 末尾の極端に短いチャンク (< k_MinAudioSamples) は pad しつつ
+                // 出力 frame 数を「実 audio 長から期待される frame 数」に切り詰める。
+                bool padded = chunkLen < k_MinAudioSamples;
+                float[] chunkAudio = new float[padded ? k_MinAudioSamples : chunkLen];
+                Array.Copy(audio, pos, chunkAudio, 0, chunkLen);
+
+                using var chunkOut = ForwardSingle(chunkAudio);
+                if (dim < 0) dim = chunkOut.shape[2];
+                int chunkFrames = chunkOut.shape[1];
+
+                int validFrames = padded
+                    ? Math.Min(chunkFrames, Math.Max(1, chunkLen / k_StridePerFrame))
+                    : chunkFrames;
+
+                float[] flat = chunkOut.DownloadToArray();
+                if (validFrames == chunkFrames)
+                {
+                    chunkOutputs.Add(flat);
+                }
+                else
+                {
+                    var trimmed = new float[validFrames * dim];
+                    Array.Copy(flat, 0, trimmed, 0, trimmed.Length);
+                    chunkOutputs.Add(trimmed);
+                }
+                totalFrames += validFrames;
+                pos += chunkLen;
             }
 
-            using var input = new Tensor<float>(
-                new TensorShape(1, audioForInput.Length), audioForInput);
-            _worker.Schedule(input);
+            // T 軸で連結
+            float[] merged = new float[totalFrames * dim];
+            int writeOffset = 0;
+            foreach (var c in chunkOutputs)
+            {
+                Array.Copy(c, 0, merged, writeOffset, c.Length);
+                writeOffset += c.Length;
+            }
 
-            // PeekOutput → ReadbackAndClone で GPU から CPU メモリへコピー
-            // 戻り値は呼び出し側に所有権を渡す
-            var output = (_worker.PeekOutput() as Tensor<float>).ReadbackAndClone();
-            return output;
+            return new Tensor<float>(new TensorShape(1, totalFrames, dim), merged);
         }
 
         /// <summary>

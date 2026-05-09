@@ -21,6 +21,7 @@ using System;
 using System.Collections;
 using System.IO;
 using Unity.InferenceEngine;
+using Unity.Profiling;
 using UnityEngine;
 using VoiceHorror.VC; // WavWriter / NpyWriter
 
@@ -29,6 +30,8 @@ namespace VoiceHorror.KnnVc
     public class VoiceConversionService : MonoBehaviour, IDisposable
     {
         const int k_HiftSampleRate = 16000;
+
+        static readonly ProfilerMarker s_TotalMarker = new ProfilerMarker("VC.Total");
 
         [Header("Models")]
         [Tooltip("WavLM Large Layer 6 ONNX")]
@@ -104,14 +107,29 @@ namespace VoiceHorror.KnnVc
         {
             EnsureInitialized();
             if (clip == null) throw new ArgumentNullException(nameof(clip));
+            AppendClipToPool(clip, PlayerPool);
+        }
 
+        /// <summary>
+        /// target (少女声優) 音声を WavLM forward して TargetPool に append する。
+        /// 起動時のプール構築 / 追加収録時に呼ぶ想定。
+        /// </summary>
+        public void AccumulateTargetVoice(AudioClip clip)
+        {
+            EnsureInitialized();
+            if (clip == null) throw new ArgumentNullException(nameof(clip));
+            AppendClipToPool(clip, TargetPool);
+        }
+
+        void AppendClipToPool(AudioClip clip, MatchingSetPool pool)
+        {
             using var feats = _extractor.ExtractFeatures(clip);
             // WavLM 出力 (1, T_frame, 1024) を (T_frame, 1024) に reshape して append
             float[] flat = feats.DownloadToArray();
             int tFrame = feats.shape[1];
             int dim = feats.shape[2];
             using var reshaped = new Tensor<float>(new TensorShape(tFrame, dim), flat);
-            PlayerPool.Append(reshaped);
+            pool.Append(reshaped);
         }
 
         /// <summary>
@@ -123,6 +141,8 @@ namespace VoiceHorror.KnnVc
         {
             EnsureInitialized();
             if (source == null) throw new ArgumentNullException(nameof(source));
+
+            using var _ = s_TotalMarker.Auto();
 
             // Step 1: query 特徴抽出
             using var query2D = ExtractQuery2D(source);
@@ -180,8 +200,10 @@ namespace VoiceHorror.KnnVc
             _disposed = true;
             _extractor?.Dispose();
             _vocoder?.Dispose();
+            _converter?.Dispose();
             _extractor = null;
             _vocoder = null;
+            _converter = null;
         }
 
         void OnDestroy()

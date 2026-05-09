@@ -217,6 +217,53 @@ namespace VoiceHorror.KnnVc.Tests.EditMode
             });
         }
 
+        // ── PR #6 review 反映: チャンク境界テスト ─────────────────────
+
+        [Test]
+        public void A6_ExtractFeatures_LongerThanChunk_ProducesContinuousOutput()
+        {
+            // 12 秒 (チャンク閾値 10秒 を超える) で 2 チャンクに分割される。
+            // 出力 frame 数が 50fps × 12 = 600 に近い値になっていれば連結 OK。
+            using var extractor = new WavLMFeatureExtractor(_wavlmModel);
+            float[] audio = GenerateSinWave(durationSec: 12.0f, freqHz: 440f, sampleRate: k_SampleRate16k);
+
+            using var feats = extractor.ExtractFeatures(audio);
+            int frames = feats.shape[1];
+
+            // 50 fps × 12 sec = 600 frame 期待。WavLM の receptive field で多少誤差あるが ±10 以内
+            Assert.That(frames, Is.InRange(580, 620),
+                $"Expected ~600 frames for 12s audio (50fps), got {frames}");
+            Assert.AreEqual(1024, feats.shape[2]);
+
+            // 全要素 NaN/Inf チェック
+            float[] arr = feats.DownloadToArray();
+            int nanCount = 0, infCount = 0;
+            for (int i = 0; i < arr.Length; i++)
+            {
+                if (float.IsNaN(arr[i])) nanCount++;
+                else if (float.IsInfinity(arr[i])) infCount++;
+            }
+            Assert.AreEqual(0, nanCount, "no NaN in chunked output");
+            Assert.AreEqual(0, infCount, "no Inf in chunked output");
+        }
+
+        [Test]
+        public void A6b_ExtractFeatures_ManyChunks_DoesNotCrash()
+        {
+            // 25 秒 = 3 チャンク (10s + 10s + 5s)、最後のチャンクは部分的
+            using var extractor = new WavLMFeatureExtractor(_wavlmModel);
+            float[] audio = GenerateSinWave(durationSec: 25.0f, freqHz: 220f, sampleRate: k_SampleRate16k);
+
+            Assert.DoesNotThrow(() =>
+            {
+                using var feats = extractor.ExtractFeatures(audio);
+                int frames = feats.shape[1];
+                // 50 fps × 25 sec = 1250 frame ± 余裕
+                Assert.That(frames, Is.InRange(1210, 1290),
+                    $"Expected ~1250 frames for 25s audio, got {frames}");
+            });
+        }
+
         // ── Helpers ───────────────────────────────────────────────────
 
         static float[] GenerateSinWave(float durationSec, float freqHz, int sampleRate)
