@@ -117,6 +117,10 @@ voice_Horror_Game/Assets/ThunderWire Studio/UHFPS.meta
 *.m4a
 !voiceCoppy_test/my_sampleVoice.wav
 !voiceCoppy_test/my_sampleVoice.m4a
+# Phase 7 タスク用テストデータ (TestSounds、合計 ~14MB)
+# my_sampleVoice.wav は user 個人音声、本番リリース時に要削除
+!voice_Horror_Game/Assets/SentisSpike/TestSounds/*.wav
+!voice_Horror_Game/Assets/SentisSpike/TestSounds/*.mp3
 
 # ---------------- Heavy 3D / animation binaries ----------------
 *.fbx
