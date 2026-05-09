@@ -11,6 +11,7 @@
 
 ### spikes/
 
+- [2026-05-09 kNN-VC Sentis 互換性検証 (Phase 6、warmup 後 PyTorch より 4x 高速)](spikes/2026-05-09_knn-vc-sentis-port.md)
 - [2026-05-09 kNN-VC ローカルスパイク (Phase 5 動作確認 + 品質確認、採用確定)](spikes/2026-05-09_knn-vc-local-spike.md)
 - [2026-05-07 CosyVoice Phase 4 ゲーム統合計画](spikes/2026-05-07_cosyvoice-phase4-plan.md)
 - [2026-05-07 CosyVoice Phase 3 パイプライン](spikes/2026-05-07_cosyvoice-phase3-pipeline.md)
