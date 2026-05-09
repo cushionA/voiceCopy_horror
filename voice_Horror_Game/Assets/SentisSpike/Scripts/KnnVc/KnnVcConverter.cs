@@ -98,63 +98,72 @@ namespace VoiceHorror.KnnVc
             // ms は CPU 側で平均計算に必要なので 1 回だけ download
             float[] ms = matchingSet.DownloadToArray();
 
-            // Step 2: 各 query row について top-K (CPU、重みつき除外もここで)
-            float[] outFlat = new float[n1 * dim];
-            int[] topkIdx = new int[k];
-            float[] topkDist = new float[k];
-
+            // Step 2 (Pass 1): top-K インデックス算出 (重みつき除外もここで)
+            // Profiler マーカーが互いにネストしないよう、TopK と Average を 2 パスに分離。
+            int[] topkIndicesAll = new int[n1 * k];
             using (s_MarkerTopK.Auto())
             {
-                using (s_MarkerAverage.Auto())
+                int[] topkIdx = new int[k];
+                float[] topkDist = new float[k];
+
+                for (int i = 0; i < n1; i++)
                 {
-                    for (int i = 0; i < n1; i++)
+                    for (int t = 0; t < k; t++)
                     {
-                        // top-K 初期化
-                        for (int t = 0; t < k; t++)
-                        {
-                            topkIdx[t] = -1;
-                            topkDist[t] = float.PositiveInfinity;
-                        }
+                        topkIdx[t] = -1;
+                        topkDist[t] = float.PositiveInfinity;
+                    }
 
-                        // dist[i, j] を線形スキャン
-                        int rowBase = i * n2;
-                        for (int j = 0; j < n2; j++)
-                        {
-                            float w = (weights != null) ? weights[j] : 1.0f;
-                            if (w <= 0f) continue; // weight=0 は完全除外
+                    int rowBase = i * n2;
+                    for (int j = 0; j < n2; j++)
+                    {
+                        float w = (weights != null) ? weights[j] : 1.0f;
+                        if (w <= 0f) continue; // weight=0 は完全除外
 
-                            float dist = distFlat[rowBase + j];
-                            if (weights != null) dist /= w;
+                        float dist = distFlat[rowBase + j];
+                        if (weights != null) dist /= w;
 
-                            // 最悪要素を見つけて入替 (k=4 想定なので線形 OK)
-                            int worstIdx = 0;
-                            for (int t = 1; t < k; t++)
-                                if (topkDist[t] > topkDist[worstIdx]) worstIdx = t;
-                            if (dist < topkDist[worstIdx])
-                            {
-                                topkDist[worstIdx] = dist;
-                                topkIdx[worstIdx] = j;
-                            }
+                        // 最悪要素を見つけて入替 (k=4 想定なので線形 OK)
+                        int worstIdx = 0;
+                        for (int t = 1; t < k; t++)
+                            if (topkDist[t] > topkDist[worstIdx]) worstIdx = t;
+                        if (dist < topkDist[worstIdx])
+                        {
+                            topkDist[worstIdx] = dist;
+                            topkIdx[worstIdx] = j;
                         }
+                    }
 
-                        // top-K 平均
-                        int validCount = 0;
-                        int outBase = i * dim;
-                        for (int d = 0; d < dim; d++) outFlat[outBase + d] = 0f;
-                        for (int t = 0; t < k; t++)
-                        {
-                            if (topkIdx[t] < 0) continue;
-                            validCount++;
-                            int msBase = topkIdx[t] * dim;
-                            for (int d = 0; d < dim; d++)
-                                outFlat[outBase + d] += ms[msBase + d];
-                        }
-                        if (validCount > 0)
-                        {
-                            float inv = 1f / validCount;
-                            for (int d = 0; d < dim; d++)
-                                outFlat[outBase + d] *= inv;
-                        }
+                    int outBase = i * k;
+                    for (int t = 0; t < k; t++) topkIndicesAll[outBase + t] = topkIdx[t];
+                }
+            }
+
+            // Step 3 (Pass 2): top-K インデックスから ms 行を平均
+            float[] outFlat = new float[n1 * dim];
+            using (s_MarkerAverage.Auto())
+            {
+                for (int i = 0; i < n1; i++)
+                {
+                    int outBase = i * dim;
+                    int idxBase = i * k;
+                    int validCount = 0;
+                    for (int d = 0; d < dim; d++) outFlat[outBase + d] = 0f;
+
+                    for (int t = 0; t < k; t++)
+                    {
+                        int j = topkIndicesAll[idxBase + t];
+                        if (j < 0) continue;
+                        validCount++;
+                        int msBase = j * dim;
+                        for (int d = 0; d < dim; d++)
+                            outFlat[outBase + d] += ms[msBase + d];
+                    }
+                    if (validCount > 0)
+                    {
+                        float inv = 1f / validCount;
+                        for (int d = 0; d < dim; d++)
+                            outFlat[outBase + d] *= inv;
                     }
                 }
             }

@@ -37,9 +37,10 @@ namespace VoiceHorror.KnnVc
         // Sentis GPU compute dispatch limit 対策のチャンクサイズ。
         // WavLM 第 1 conv (stride=5) の出力長が 65,535 を超えると thread group 上限を超え
         // 特徴量が破損する (Pool / CopyOps の "Exceeded safe compute dispatch group count limit" 警告)。
-        // 安全マージンを取って 10 秒 = 160,000 samples → 第1 conv 出力 32,000 を上限とする。
+        // 16 秒 = 256,000 samples → 第1 conv 出力 51,200 (上限 65,535 まで安全マージン 27%)。
         // PyTorch では発生しないが Sentis の compute shader では必須の制限。
-        const int k_MaxChunkSamples = 160000; // 10 秒 @ 16kHz
+        // 旧 10 秒 → 16 秒に拡張: 35 秒 source の forward 回数 4→3 に削減 (~50-100ms 短縮)。
+        const int k_MaxChunkSamples = 256000; // 16 秒 @ 16kHz
         // WavLM の出力 frame rate (16kHz / 320 stride = 50 fps)
         const int k_StridePerFrame = 320;
 
