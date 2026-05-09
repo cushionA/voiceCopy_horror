@@ -130,8 +130,10 @@ namespace VoiceHorror.KnnVc.Tests.EditMode
         }
 
         [Test]
-        public void B3c_WeightedPoolBuilder_AlphaOne_BPartWeightZero()
+        public void B3c_WeightedPoolBuilder_AlphaOne_ReturnsAOnlyEarlyOut()
         {
+            // P2 最適化: α=1.0 では a プールだけを返す (b は完全無視)
+            // 結果は連結ベース実装と等価 (b 部分の weight=0 frame は kNN で除外されるため)
             var poolA = new MatchingSetPool("A");
             var poolB = new MatchingSetPool("B");
             using (var fa = MakeRandomFeatures(50, 1024, seed: 1)) poolA.Append(fa);
@@ -139,18 +141,19 @@ namespace VoiceHorror.KnnVc.Tests.EditMode
 
             var (features, weights) = WeightedPoolBuilder.Build(poolA, poolB, alpha: 1.0f);
 
-            // α=1.0: A 部分は weight=1.0、B 部分は weight=0.0 (B 完全無視)
+            // P2 早期 return: features = a のみ (50 frames)、weights 全 1.0
+            Assert.AreEqual(50, features.shape[0], "α=1.0 で a のみ返す (P2 最適化)");
+            Assert.AreEqual(50, weights.Length);
             for (int i = 0; i < 50; i++)
                 Assert.AreEqual(1.0f, weights[i], 1e-6f);
-            for (int i = 50; i < 100; i++)
-                Assert.AreEqual(0.0f, weights[i], 1e-6f);
 
             features.Dispose();
         }
 
         [Test]
-        public void B3d_WeightedPoolBuilder_AlphaZero_APartWeightZero()
+        public void B3d_WeightedPoolBuilder_AlphaZero_ReturnsBOnlyEarlyOut()
         {
+            // P2 最適化: α=0.0 では b プールだけを返す
             var poolA = new MatchingSetPool("A");
             var poolB = new MatchingSetPool("B");
             using (var fa = MakeRandomFeatures(50, 1024, seed: 1)) poolA.Append(fa);
@@ -158,9 +161,9 @@ namespace VoiceHorror.KnnVc.Tests.EditMode
 
             var (features, weights) = WeightedPoolBuilder.Build(poolA, poolB, alpha: 0.0f);
 
+            Assert.AreEqual(50, features.shape[0], "α=0.0 で b のみ返す (P2 最適化)");
+            Assert.AreEqual(50, weights.Length);
             for (int i = 0; i < 50; i++)
-                Assert.AreEqual(0.0f, weights[i], 1e-6f);
-            for (int i = 50; i < 100; i++)
                 Assert.AreEqual(1.0f, weights[i], 1e-6f);
 
             features.Dispose();

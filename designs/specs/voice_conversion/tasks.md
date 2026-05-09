@@ -92,10 +92,13 @@
   - α=1.0 (target weight 全 1.0、player weight 全 0.0) のケースで b プール完全無視
 - **対応 spec**: MS-003 重みつき kNN
 
-#### Task C-2: cosine_dist 数値一致
-- **テスト**:
-  - matcher.py:21 fast_cosine_dist との数値一致 (rtol < 1e-4)
-- **対応 spec**: VC-001 数値正確性
+#### Task C-2: cosine_dist 数値一致 [SCOPE OUT]
+- **判定**: Phase 7 review (2026-05-09) で **scope out**。
+  matcher.py との数値一致は Python sandbox (`C:/Users/tatuk/Desktop/Sandbox/knn-vc-spike/`)
+  で sandbox 検証フェーズに完了済 (Phase 5 spike report)。
+  Unity 側の C# 実装の数値正確性は C-1 (shape) + C-1b (重みつき動作) + C-3 (identity) で
+  実用上カバーできているため、matcher.py 完全一致テストは過剰投資と判断。
+- **対応 spec**: 削除 (元 VC-001 数値正確性、C-1/C-1b/C-3 でカバー)
 
 #### Task C-3: 同一プール変換 (identity test)
 - **テスト**:

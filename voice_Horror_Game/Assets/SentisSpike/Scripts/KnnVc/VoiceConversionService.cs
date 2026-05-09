@@ -127,13 +127,13 @@ namespace VoiceHorror.KnnVc
             // Step 1: query 特徴抽出
             using var query2D = ExtractQuery2D(source);
 
-            // Step 2: 重みつき合成プール構築
-            var (mergedFeats, mergedWeights) = WeightedPoolBuilder.Build(
+            // Step 2: 重みつき合成プール構築 (using で例外時のリーク防止)
+            var (mergedFeatsRaw, mergedWeights) = WeightedPoolBuilder.Build(
                 TargetPool, PlayerPool, targetWeightAlpha);
+            using var mergedFeats = mergedFeatsRaw;
 
             // Step 3: kNN 変換
             using var converted2D = _converter.Convert(query2D, mergedFeats, mergedWeights);
-            mergedFeats.Dispose();
 
             // Step 4: HiFiGAN vocode (channel-last (1, T_frame, 1024) に reshape)
             int tFrame = converted2D.shape[0];

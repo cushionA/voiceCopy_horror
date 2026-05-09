@@ -41,6 +41,23 @@ namespace VoiceHorror.KnnVc
 
             int nA = a.FrameCount;
             int nB = b.FrameCount;
+
+            // 早期 return: α=1.0 なら b 完全無視、α=0.0 なら a 完全無視
+            // → メモリ + 後続 kNN コストを削減 (narrative 序盤 α=1.0 が頻出)
+            // 元の実装でも weight=0 frame は KnnVcConverter で除外されるため結果は同等
+            if (alpha >= 1f)
+            {
+                var weightsA = new float[nA];
+                for (int i = 0; i < nA; i++) weightsA[i] = 1f;
+                return (a.ToTensor(), weightsA);
+            }
+            if (alpha <= 0f)
+            {
+                var weightsB = new float[nB];
+                for (int i = 0; i < nB; i++) weightsB[i] = 1f;
+                return (b.ToTensor(), weightsB);
+            }
+
             int nTotal = nA + nB;
 
             // features 連結

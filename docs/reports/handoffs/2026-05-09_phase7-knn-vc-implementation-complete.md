@@ -129,6 +129,15 @@ Phase 5/6/7 を別 PR として出す。
 実機で `VoiceConversionService` の lifecycle 統合 + パフォーマンス計測 (RTF、VRAM)。
 sandbox の cross_test 結果と Unity ランタイムの実測比較。
 
+特に確認したい項目:
+- **WarmupAsync の体感**: `_extractor.Warmup()` が main thread で 392ms 同期実行する。
+  `yield return null` は forward 後にしか入らないため、loading 画面が一瞬フリーズする。
+  許容できなければ `Awaitable.BackgroundThreadAsync()` で別スレッド化検討
+  (ただし Sentis Worker の thread-safety は要確認、現状未保証)
+- **KnnVcConverter のレイテンシ**: 1秒音声で **目標 5-15ms**。CPU 素朴実装 O(N1×N2×dim) のため、
+  matching set 15000 frames 想定で 1-3 秒かかる可能性 → 実測で許容判断、NG なら Burst+Job
+  System で SIMD 化検討
+
 ---
 
 ## 関連リソース

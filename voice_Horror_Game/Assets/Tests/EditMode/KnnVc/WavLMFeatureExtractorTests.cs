@@ -179,6 +179,44 @@ namespace VoiceHorror.KnnVc.Tests.EditMode
                 "Double Dispose should be safe (idempotent)");
         }
 
+        // ── A-5: 短入力 zero-pad ───────────────────────────────────────
+
+        [Test]
+        public void A5_ExtractFeatures_ShortInput_ZeroPadsAndSucceeds()
+        {
+            // 1600 samples 未満 (0.1 秒未満) は zero-pad されて WavLM が安全に動く
+            using var extractor = new WavLMFeatureExtractor(_wavlmModel);
+
+            // 800 samples = 0.05 秒 @ 16kHz (zero-pad 必須レンジ)
+            float[] shortAudio = GenerateSinWave(durationSec: 0.05f, freqHz: 440f, sampleRate: k_SampleRate16k);
+            Assert.AreEqual(800, shortAudio.Length, "テスト前提: 800 samples");
+
+            using var feats = extractor.ExtractFeatures(shortAudio);
+
+            Assert.IsNotNull(feats, "短入力でも null にならない");
+            Assert.AreEqual(3, feats.shape.rank);
+            Assert.AreEqual(1, feats.shape[0]);
+            // 1600 samples (zero-pad 後) で T_frame ≈ 1600/320 = 5
+            Assert.That(feats.shape[1], Is.GreaterThanOrEqualTo(1),
+                "zero-pad 後でも 1 frame 以上は出る");
+            Assert.AreEqual(1024, feats.shape[2]);
+        }
+
+        [Test]
+        public void A5b_ExtractFeatures_VeryShortInput_DoesNotThrow()
+        {
+            // さらに短い 100 samples (~6ms) でも例外なく完走
+            using var extractor = new WavLMFeatureExtractor(_wavlmModel);
+            float[] veryShort = GenerateSinWave(durationSec: 0.006f, freqHz: 440f, sampleRate: k_SampleRate16k);
+            Assert.That(veryShort.Length, Is.LessThanOrEqualTo(100));
+
+            Assert.DoesNotThrow(() =>
+            {
+                using var feats = extractor.ExtractFeatures(veryShort);
+                Assert.IsNotNull(feats);
+            });
+        }
+
         // ── Helpers ───────────────────────────────────────────────────
 
         static float[] GenerateSinWave(float durationSec, float freqHz, int sampleRate)

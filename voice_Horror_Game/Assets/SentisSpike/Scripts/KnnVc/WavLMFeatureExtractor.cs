@@ -29,6 +29,9 @@ namespace VoiceHorror.KnnVc
     {
         const int k_SampleRate16k = 16000;
         const int k_WarmupAudioSamples = 80000; // 5秒 @ 16kHz
+        // WavLM の receptive field を満たすための最小入力長 (0.1 秒 = 1600 samples)
+        // これ未満は zero-pad して安全に forward させる (spec.md SR-* / 設計の堅牢化)
+        const int k_MinAudioSamples = 1600;
 
         readonly Worker _worker;
         readonly BackendType _backend;
@@ -54,8 +57,18 @@ namespace VoiceHorror.KnnVc
             if (audio16kMono == null || audio16kMono.Length == 0)
                 throw new ArgumentException("audio is null or empty", nameof(audio16kMono));
 
+            // WavLM receptive field 確保のため、短すぎる入力は zero-pad
+            // (1600 samples = 0.1 秒 @ 16kHz、< これでは output frame 0 で空 Tensor 返り得る)
+            float[] audioForInput = audio16kMono;
+            if (audio16kMono.Length < k_MinAudioSamples)
+            {
+                audioForInput = new float[k_MinAudioSamples];
+                Array.Copy(audio16kMono, 0, audioForInput, 0, audio16kMono.Length);
+                // 残り (k_MinAudioSamples - audio16kMono.Length) は new float[] のデフォルト 0
+            }
+
             using var input = new Tensor<float>(
-                new TensorShape(1, audio16kMono.Length), audio16kMono);
+                new TensorShape(1, audioForInput.Length), audioForInput);
             _worker.Schedule(input);
 
             // PeekOutput → ReadbackAndClone で GPU から CPU メモリへコピー

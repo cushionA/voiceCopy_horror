@@ -62,10 +62,16 @@ namespace VoiceHorror.KnnVc
         }
 
         /// <summary>
-        /// 類似度から ED 判定。
-        /// sim > High           → BadCaptured (カラダを奪われる)
-        /// MidLow < sim ≤ High  → BadVoiceChange (声色変えて電話切れ)
-        /// sim ≤ MidLow         → Good (脱出)
+        /// 類似度から ED 判定 (spec.md SS-002 の 3 段階)。
+        ///
+        /// sim > HighThreshold      → BadCaptured (カラダを奪われる)
+        /// MidLow < sim ≤ MidHigh  → BadVoiceChange (声色変えて電話切れ)
+        /// sim ≤ MidLow             → Good (脱出)
+        ///
+        /// (MidHigh, HighThreshold] の中間域は **未定義**: HighThreshold > MidHigh の
+        /// 設定では存在しうる。挙動として BadCaptured 寄りに倒す (高類似側に保守的)。
+        ///
+        /// 推奨設定: MidLow < MidHigh ≤ HighThreshold (Phase 8 キャリブレーション後)
         /// </summary>
         public Verdict Judge(float similarity)
         {
@@ -74,6 +80,8 @@ namespace VoiceHorror.KnnVc
                     "Thresholds is null. Inject EdThresholdsAsset before calling Judge().");
 
             if (similarity > Thresholds.HighThreshold) return Verdict.BadCaptured;
+            if (similarity > Thresholds.MidHigh)
+                return Verdict.BadCaptured; // MidHigh < sim ≤ High の中間も「奪われ寄り」(保守側)
             if (similarity > Thresholds.MidLow)        return Verdict.BadVoiceChange;
             return Verdict.Good;
         }

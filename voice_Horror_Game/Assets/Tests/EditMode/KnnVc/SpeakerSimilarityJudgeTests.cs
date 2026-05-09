@@ -111,6 +111,23 @@ namespace VoiceHorror.KnnVc.Tests.EditMode
         }
 
         [Test]
+        public void E2bb_Judge_MidHighToHigh_BadCaptured_Conservative()
+        {
+            // MidHigh < sim ≤ HighThreshold の中間域は「奪われ寄り」(保守側) で BadCaptured
+            // spec.md SS-002 の 3 段階分岐 (MidHigh パラメータが活用される)
+            var so = ScriptableObject.CreateInstance<EdThresholdsAsset>();
+            so.HighThreshold = 0.85f;
+            so.MidHigh = 0.70f;
+            so.MidLow = 0.40f;
+
+            var judge = new SpeakerSimilarityJudge(so);
+            Assert.AreEqual(SpeakerSimilarityJudge.Verdict.BadCaptured, judge.Judge(0.75f),
+                "sim=0.75 (MidHigh < sim < High) → BadCaptured");
+            Assert.AreEqual(SpeakerSimilarityJudge.Verdict.BadCaptured, judge.Judge(0.85f),
+                "sim=0.85 (= High 境界) → BadCaptured (>= だが > なので、含む側挙動を確認)");
+        }
+
+        [Test]
         public void E2c_Judge_LowSimilarity_Good()
         {
             var so = ScriptableObject.CreateInstance<EdThresholdsAsset>();
