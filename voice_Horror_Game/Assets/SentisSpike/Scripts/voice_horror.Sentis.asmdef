@@ -1,0 +1,16 @@
+{
+    "name": "voice_horror.Sentis",
+    "rootNamespace": "VoiceHorror",
+    "references": [
+        "Unity.InferenceEngine"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
