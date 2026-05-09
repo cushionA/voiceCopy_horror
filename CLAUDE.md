@@ -28,50 +28,71 @@
 
 ## 音声システム
 
-### 確定構成
+### 確定構成 (2026-05-09 pivot 後、Phase 5 開始時点)
 
 | 項目 | 値 |
 |------|----|
-| TTS モデル | Qwen3-TTS-12Hz-1.7B-Base (Apache 2.0、商用 OK) ※0.6B は CUDA assert で動かず |
-| ComfyUI 統合 | TTS-Audio-Suite (diodiogod) |
-| ComfyUI パス | `C:\Users\tatuk\Documents\ComfyUI\` |
-| カスタムノード | `...\ComfyUI\custom_nodes\TTS-Audio-Suite\` |
-| ワークフロー | `voiceCoppy_test/japanese_clone_test_qwen3.json` |
-| サンプル音声 | `voiceCoppy_test/my_sampleVoice.wav`（北風と太陽、30 秒、44.1kHz ステレオ 16-bit） |
-| ComfyUI input コピー | `C:\Users\tatuk\Documents\ComfyUI\input\my_sampleVoice.wav` |
+| 路線 | **VC (Voice Conversion、音声→音声)** ※TTS は overkill で不採用 |
+| VC エンジン | **kNN-VC** (https://github.com/bshall/knn-vc, MIT) — Phase 5 spike 中 |
+| 特徴抽出 | **WavLM Large** (~600MB FP16, Microsoft) — VC と類似度判定で 1 モデル 2 役 |
+| Vocoder | small HiFiGAN (~50MB) |
+| 想定 VRAM | ~900MB (CosyVoice3 比 1/3) |
+| ランタイム | **Unity Inference Engine (Sentis 2.5)** — `com.unity.ai.inference: 2.5.0` |
+| サンプル音声 | `voiceCoppy_test/my_sampleVoice.wav`（北風と太陽、30 秒、44.1kHz） |
+| 公式デモ | https://bshall.github.io/knn-vc/ (品質確認済) |
 | GPU | RTX 2070 Super 8GB VRAM |
 
-### Qwen3-TTS パラメータ（確定）
+### kNN-VC 設計指針
 
-```
-model_size=1.7B (FP16), voice_preset=None, language=Japanese
-temperature=0.9, repetition_penalty=1.05
-```
+- **学習不要**: matching set 構築 = WavLM forward + 特徴プール保存のみ (~5-10秒)
+- **プレイヤー声蓄積**: 録音ごとに forward 1 回 (0.1-0.3 秒) してプール append
+- **「混ざっていく」演出**: matching set α 比率変動 (`α × 少女プール + (1-α) × プレイヤープール`)
+- **想定レイテンシ**: 1秒音声に 50-160ms (Sentis で 80-280ms)
+- **収録カバレッジ**: ATR503 文 + ホラー特有発話 (ささやき/叫び等) で音素 + 韻律網羅
 
-### 候補モデル（必要になれば）
-- AivisSpeech / Style-Bert-VITS2（**LGPL v3**、日本語特化、高品質。別プロセス API 呼び出しで Steam 配信 OK。AGPL ではないので注意）
-- GPT-SoVITS v2（MIT、fine-tune 可能）
+### 撤退路線 (参考保存)
+
+- **CosyVoice3 0.5B-RL** (Apache 2.0): Phase 3.5 で撤退。DiT mu に token encoder 隠れ状態必要、生 mel で 58% -inf 発散。撤退時点 C# は `voice_Horror_Game/Assets/SentisSpike/Scripts/VoiceConversion/` に保存、Python は `voiceCoppy_test/legacy_cosyvoice/` に隔離
+- **Qwen3-TTS 1.7B** (Apache 2.0): Phase 3 で TTS 路線断念、VC へ pivot 時に不採用化 (LLM 部分がデッドウェイト)
+
+### 候補モデル (kNN-VC 撤退時の代替)
+- **OpenVoice v2** (MIT、~150MB): TCC のみで zero-shot VC、Sentis 互換性未検証
+- **FreeVC** (MIT、~200MB): WavLM + flow VAE
+- **RVC v2** (MIT): target ごと学習要、zero-shot 不可なので voice_horror 適合は低
+
+### ComfyUI 環境 (CosyVoice3 期に整備、kNN-VC では使わないが参考)
+- パス: `C:\Users\tatuk\Documents\ComfyUI\`
+- カスタムノード: `...\ComfyUI\custom_nodes\TTS-Audio-Suite\` (diodiogod) — kNN-VC ノードなし
+- 残存ワークフロー: `voiceCoppy_test/vc_engine_compare.json`, `voiceCoppy_test/vc_test_chatterbox.json`
 
 ### キーワード検出（未確定）
-候補: Picovoice Porcupine / openWakeWord カスタム学習モデル  
+候補: Picovoice Porcupine / openWakeWord カスタム学習モデル
 ⚠ openWakeWord の**事前学習モデルは CC-BY-NC-SA（商用不可）**。カスタム学習のみ使用可。
 
 ---
 
 ## ライセンス判断表
 
-### 商用 OK
+### 商用 OK (Steam 配信可)
 
-| モデル / ライブラリ | ライセンス |
-|-------------------|-----------|
-| Qwen3-TTS-12Hz-1.7B-Base | Apache 2.0 |
-| GPT-SoVITS v2 | MIT |
-| AivisSpeech / Style-Bert-VITS2 | LGPL v3（DLL 利用で伝染回避可） |
+| モデル / ライブラリ | ライセンス | 用途 |
+|-------------------|-----------|------|
+| **kNN-VC** (bshall/knn-vc) | MIT | **採用 (Phase 5 spike)** |
+| **WavLM Large** (Microsoft) | 要確認 | **採用 (Phase 5 spike) — LICENSE 直確認必須** |
+| OpenVoice v2 (myshell-ai) | MIT | 撤退時の代替候補 |
+| FreeVC | MIT | 撤退時の代替候補 |
+| Qwen3-TTS-12Hz-1.7B-Base | Apache 2.0 | 不採用 (TTS 路線断念) |
+| CosyVoice3 0.5B-RL | Apache 2.0 | 撤退 (Phase 3.5) |
+| GPT-SoVITS v2 | MIT | 検討候補 (RVC-Boss) |
+| ChatterBox (Resemble AI) | MIT | 検討候補 (CosyVoice3 と同種アーキテクチャ) |
 
-### 商用禁止（使用禁止）
+### 商用禁止 (使用禁止)
 
 | モデル | ライセンス | 理由 |
 |--------|-----------|------|
+| **AivisSpeech** | **AGPL v3** | ネットワーク提供条項あり、別プロセス API でも伝染リスク高 |
+| **BERT-VITS2** (fishaudio) | **AGPL v3** | 同上 |
+| **Style-Bert-VITS2** (litagin02) | **AGPL v3** | 同上 |
 | F5-TTS | CC-BY-NC | NC 条項 |
 | XTTS v2 | Coqui Public Model License | 商用禁止 |
 | Fish Speech 事前学習モデル | 商用有料 | 別途契約必要 |
@@ -148,7 +169,7 @@ Unity プロジェクトパス: `voice_Horror_Game/`（UHFPS 同梱、URP）
 ### ライセンス確認
 - ライセンス（Apache / MIT / LGPL / AGPL / CC-BY-NC 等）を主張する前に、必ずモデルカードまたは LICENSE ファイルを WebFetch で確認する。
 - 「以前確認した」と記憶を引用しない。バージョンアップでライセンスが変わる。
-- 過去の誤認: AivisSpeech を AGPL と誤認 → 正しくは **LGPL v3**。
+- **過去の誤認 (2026-05-06 訂正)**: AivisSpeech / BERT-VITS2 / Style-Bert-VITS2 を当初 LGPL v3 と記載していたが、LICENSE 直接確認で **AGPL v3** が正解。Steam 配信不可。CLAUDE.md 旧版の「LGPL v3」記述は誤り。
 
 ### TDD エッジケース
 - C# 実装で機能完了を宣言する前に、以下のテストを必ず追加する:
