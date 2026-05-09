@@ -20,11 +20,14 @@
 
 using System;
 using Unity.InferenceEngine;
+using Unity.Profiling;
 
 namespace VoiceHorror.KnnVc
 {
     public class KnnVcConverter
     {
+        static readonly ProfilerMarker s_Marker = new ProfilerMarker("VC.kNN");
+
         public int TopK { get; set; } = 4;
 
         /// <summary>
@@ -50,6 +53,8 @@ namespace VoiceHorror.KnnVc
             if (query.shape[1] != matchingSet.shape[1])
                 throw new ArgumentException(
                     $"dim mismatch: query={query.shape[1]}, ms={matchingSet.shape[1]}");
+
+            using var _ = s_Marker.Auto();
 
             int n1 = query.shape[0];
             int n2 = matchingSet.shape[0];
