@@ -103,8 +103,14 @@ namespace VoiceHorror.KnnVc
         /// <summary>
         /// Phase 8 最適化: flat 化済みキャッシュへの直接参照 (read-only)。
         /// WeightedPoolBuilder 等の連結で DownloadToArray + 反復コピーを回避するための公開 API。
-        /// 戻り値の Span は次の <see cref="Append"/> 呼び出しで invalidate されるため、
-        /// 同期的にコピー / 連結で消費すること。
+        ///
+        /// ライフタイム規約 (重要):
+        ///   - 戻り値の Span は呼出時点の内部 float[] を直接指している。
+        ///   - 後続の <see cref="Append"/> で frame 数が cache 容量を超えると内部配列が
+        ///     再 alloc される (旧配列は GC 任せ)。その時点で旧 Span は古い snapshot を
+        ///     見続けるか、最悪 stale データになる。
+        ///   - したがって、Span を取得した後は同フレーム内に CopyTo / 連結で消費し、
+        ///     Append を挟む処理に持ち回さないこと。
         /// </summary>
         public ReadOnlySpan<float> AsReadOnlyFlatSpan()
         {
@@ -117,6 +123,7 @@ namespace VoiceHorror.KnnVc
         /// <summary>
         /// weights のキャッシュへの直接参照 (read-only)。
         /// AsReadOnlyFlatSpan と対をなす Phase 8 最適化 API。
+        /// ライフタイム規約は <see cref="AsReadOnlyFlatSpan"/> と同じ。
         /// </summary>
         public ReadOnlySpan<float> AsReadOnlyWeightsSpan()
         {
@@ -200,9 +207,9 @@ namespace VoiceHorror.KnnVc
 
         void InvalidateCache()
         {
+            // インデックスのリセットのみ。配列の再利用判定 (length 比較 → 必要なら再 alloc)
+            // は EnsureFlatCache 側に集約しているため、ここでは何もしない。
             _cachedFrameCount = -1;
-            // _cachedFlat / _cachedWeights は次回 EnsureFlatCache で書き直すので
-            // 容量を残したまま (再 alloc 回避)
         }
 
         void EnsureFlatCache()

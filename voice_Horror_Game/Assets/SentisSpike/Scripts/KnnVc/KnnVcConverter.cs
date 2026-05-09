@@ -28,7 +28,7 @@
 //
 // 関連 spec: VC-001 内部、MS-003 重みつき kNN
 // 関連 design: design.md component 3
-// 関連 tests: C-1 〜 C-6
+// 関連 tests: C-1 〜 C-7
 
 using System;
 using Unity.InferenceEngine;
@@ -50,7 +50,26 @@ namespace VoiceHorror.KnnVc
         const float k_ZeroWeightEps = 1e-30f;
 
         public int TopK { get; set; } = 4;
-        public BackendType Backend { get; set; } = BackendType.GPUCompute;
+
+        BackendType _backend = BackendType.GPUCompute;
+
+        /// <summary>
+        /// 推論 backend。値変更時は次回 Convert() 呼出で worker を作り直す。
+        /// </summary>
+        public BackendType Backend
+        {
+            get => _backend;
+            set
+            {
+                if (_backend == value) return;
+                _backend = value;
+                // backend が変わったら graph 再 compile が必要なため worker を破棄。
+                // EnsureModel() の cache 比較は shape のみなので、ここで明示破棄しないと古い worker が残る。
+                _worker?.Dispose();
+                _worker = null;
+                _cachedN1 = _cachedN2 = _cachedDim = _cachedK = -1;
+            }
+        }
 
         // Sentis worker は (n1, n2, dim, k) shape でモデルが固定されるため、
         // shape が変わったら作り直す。最初の Convert() 呼出時に lazy 生成。
@@ -60,10 +79,6 @@ namespace VoiceHorror.KnnVc
         int _cachedDim = -1;
         int _cachedK = -1;
         bool _disposed;
-
-        // GPU 側に投げる weights を (毎呼出 alloc 抑制のため) フィールドキャッシュ。
-        // weights == null の場合は全 1.0、weights ありの場合は w[j]=max(weights[j], k_ZeroWeightEps) を入れる。
-        float[] _weightsForGpuCache;
 
         /// <summary>
         /// query [N1, 1024] と matching set [N2, 1024] から kNN マッチして
@@ -90,7 +105,7 @@ namespace VoiceHorror.KnnVc
                 throw new ArgumentException(
                     $"dim mismatch: query={query.shape[1]}, ms={matchingSet.shape[1]}");
 
-            using var _ = s_MarkerTotal.Auto();
+            using ProfilerMarker.AutoScope _ = s_MarkerTotal.Auto();
 
             int n1 = query.shape[0];
             int n2 = matchingSet.shape[0];
@@ -102,55 +117,49 @@ namespace VoiceHorror.KnnVc
                     $"weights length {weights.Length} must match ms count {n2}");
 
             // Step 1: GPU に渡す weights を準備 (weight=0 → eps、null → 全 1.0)
-            Tensor<float> weightsTensor;
-            using (s_MarkerWeightsPrep.Auto())
+            // Tensor<float> はバッキング配列の所有権を奪うため、毎呼出で new float[n2] が必要 (alloc 不可避)。
+            float[] tensorBacking = new float[n2];
+            using (ProfilerMarker.AutoScope __ = s_MarkerWeightsPrep.Auto())
             {
-                if (_weightsForGpuCache == null || _weightsForGpuCache.Length < n2)
-                    _weightsForGpuCache = new float[n2];
                 if (weights == null)
                 {
-                    for (int i = 0; i < n2; i++) _weightsForGpuCache[i] = 1.0f;
+                    for (int i = 0; i < n2; i++) tensorBacking[i] = 1.0f;
                 }
                 else
                 {
                     for (int i = 0; i < n2; i++)
                     {
                         float w = weights[i];
-                        _weightsForGpuCache[i] = (w > 0f) ? w : k_ZeroWeightEps;
+                        tensorBacking[i] = (w > 0f) ? w : k_ZeroWeightEps;
                     }
                 }
-                // Tensor<float> にラップ。Worker への入力後 dispose する。
-                // 初回 alloc 後は同 shape でなければ再 alloc が必要。
-                // n2 が変わると graph も再構築するので tensor も毎回新規で問題ない。
-                float[] tensorBacking = new float[n2];
-                Buffer.BlockCopy(_weightsForGpuCache, 0, tensorBacking, 0, n2 * sizeof(float));
-                weightsTensor = new Tensor<float>(new TensorShape(n2), tensorBacking);
             }
 
             // Step 2: GPU graph を準備 (shape 変化時のみ再構築)
             EnsureModel(n1, n2, dim, k);
 
-            // Step 3: 推論実行
+            // Step 3: 推論実行 + readback
+            // weightsTensor は SetInput 後すぐ不要だが、Schedule() の例外時に native handle が漏れるのを
+            // 避けるため using で囲む。
             float[] outFlat;
-            using (s_MarkerGpuExec.Auto())
+            using (Tensor<float> weightsTensor = new Tensor<float>(new TensorShape(n2), tensorBacking))
             {
-                _worker.SetInput("q", query);
-                _worker.SetInput("ms", matchingSet);
-                _worker.SetInput("w", weightsTensor);
-                _worker.Schedule();
-            }
+                using (ProfilerMarker.AutoScope __ = s_MarkerGpuExec.Auto())
+                {
+                    _worker.SetInput("q", query);
+                    _worker.SetInput("ms", matchingSet);
+                    _worker.SetInput("w", weightsTensor);
+                    _worker.Schedule();
+                }
 
-            // Step 4: 出力 readback
-            // 出力 shape は [N1, dim]、これだけ CPU に持ってくる。
-            // Worker の output tensor から直接 DownloadToArray (内部で同期 readback)。
-            using (s_MarkerReadback.Auto())
-            {
-                var output = _worker.PeekOutput() as Tensor<float>;
-                output.CompleteAllPendingOperations();
-                outFlat = output.DownloadToArray();
+                // 出力 readback。出力 shape は [N1, dim]、これだけ CPU に持ってくる。
+                using (ProfilerMarker.AutoScope __ = s_MarkerReadback.Auto())
+                {
+                    Tensor<float> output = _worker.PeekOutput() as Tensor<float>;
+                    output.CompleteAllPendingOperations();
+                    outFlat = output.DownloadToArray();
+                }
             }
-
-            weightsTensor.Dispose();
 
             return new Tensor<float>(new TensorShape(n1, dim), outFlat);
         }
@@ -169,47 +178,47 @@ namespace VoiceHorror.KnnVc
             _worker?.Dispose();
             _worker = null;
 
-            var graph = new FunctionalGraph();
-            var qIn  = graph.AddInput<float>(new TensorShape(n1, dim), "q");
-            var msIn = graph.AddInput<float>(new TensorShape(n2, dim), "ms");
-            var wIn  = graph.AddInput<float>(new TensorShape(n2), "w");
+            FunctionalGraph graph = new FunctionalGraph();
+            FunctionalTensor qIn  = graph.AddInput<float>(new TensorShape(n1, dim), "q");
+            FunctionalTensor msIn = graph.AddInput<float>(new TensorShape(n2, dim), "ms");
+            FunctionalTensor wIn  = graph.AddInput<float>(new TensorShape(n2), "w");
 
             // L2 正規化 (per row)。0 ベクトル (無音入力) で NaN にならないよう
             // ノルムに極小の eps を加算してから割る (旧 C# 実装の Math.Max(norm, 1e-12f) 相当)
-            var eps = Functional.Constant(1e-12f);
-            var qL2  = Functional.Add(Functional.ReduceL2(qIn, dim: 1, keepdim: true), eps);
-            var qN   = Functional.Div(qIn, qL2);
-            var msL2 = Functional.Add(Functional.ReduceL2(msIn, dim: 1, keepdim: true), eps);
-            var msN  = Functional.Div(msIn, msL2);
+            FunctionalTensor eps  = Functional.Constant(1e-12f);
+            FunctionalTensor qL2  = Functional.Add(Functional.ReduceL2(qIn, dim: 1, keepdim: true), eps);
+            FunctionalTensor qN   = Functional.Div(qIn, qL2);
+            FunctionalTensor msL2 = Functional.Add(Functional.ReduceL2(msIn, dim: 1, keepdim: true), eps);
+            FunctionalTensor msN  = Functional.Div(msIn, msL2);
 
             // sim = qN @ msN.T   → [N1, N2]
-            var msNT = Functional.Transpose(msN, 0, 1);
-            var sim  = Functional.MatMul(qN, msNT);
+            FunctionalTensor msNT = Functional.Transpose(msN, 0, 1);
+            FunctionalTensor sim  = Functional.MatMul(qN, msNT);
 
             // dist = 1 - sim
-            var one  = Functional.Constant(1.0f);
-            var dist = Functional.Sub(one, sim);
+            FunctionalTensor one  = Functional.Constant(1.0f);
+            FunctionalTensor dist = Functional.Sub(one, sim);
 
             // weighted = dist / w (broadcast: [N1, N2] / [1, N2])
             // w_safe は CPU 側で w<=0 → eps にすり替え済 → ここでは単純除算でよい
-            var w2D = wIn.Reshape(new[] { 1, n2 });
-            var weighted = Functional.Div(dist, w2D);
+            FunctionalTensor w2D      = wIn.Reshape(new[] { 1, n2 });
+            FunctionalTensor weighted = Functional.Div(dist, w2D);
 
             // TopK smallest k → indices [N1, k]
             // FunctionalTensor[] = [values, indices]
-            var topkOut = Functional.TopK(weighted, k, dim: 1, largest: false, sorted: false);
-            var topkIndices = topkOut[1]; // [N1, k] int
+            FunctionalTensor[] topkOut    = Functional.TopK(weighted, k, dim: 1, largest: false, sorted: false);
+            FunctionalTensor   topkIndices = topkOut[1]; // [N1, k] int
 
             // IndexSelect: 1D indices [N1*k] で ms axis=0 から gather → [N1*k, dim]
-            var flatIdx  = topkIndices.Reshape(new[] { n1 * k });
-            var gathered = msIn.IndexSelect(0, flatIdx);
+            FunctionalTensor flatIdx  = topkIndices.Reshape(new[] { n1 * k });
+            FunctionalTensor gathered = msIn.IndexSelect(0, flatIdx);
 
             // [N1, k, dim] に reshape して axis=1 で平均 → [N1, dim]
-            var gathered3D = gathered.Reshape(new[] { n1, k, dim });
-            var meanOut    = Functional.ReduceMean(gathered3D, dim: 1, keepdim: false);
+            FunctionalTensor gathered3D = gathered.Reshape(new[] { n1, k, dim });
+            FunctionalTensor meanOut    = Functional.ReduceMean(gathered3D, dim: 1, keepdim: false);
 
-            var model = graph.Compile(meanOut);
-            _worker = new Worker(model, Backend);
+            Model model = graph.Compile(meanOut);
+            _worker = new Worker(model, _backend);
 
             _cachedN1 = n1;
             _cachedN2 = n2;

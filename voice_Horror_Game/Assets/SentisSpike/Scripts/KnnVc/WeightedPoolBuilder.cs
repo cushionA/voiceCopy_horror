@@ -73,10 +73,10 @@ namespace VoiceHorror.KnnVc
             ReadOnlySpan<float> bFlat = b.AsReadOnlyFlatSpan();
 
             float[] mergedFlat = new float[nTotal * k_FeatureDim];
-            var mergedSpan = new Span<float>(mergedFlat);
+            Span<float> mergedSpan = new Span<float>(mergedFlat);
             aFlat.CopyTo(mergedSpan);
             bFlat.CopyTo(mergedSpan.Slice(aFlat.Length));
-            var mergedTensor = new Tensor<float>(new TensorShape(nTotal, k_FeatureDim), mergedFlat);
+            Tensor<float> mergedTensor = new Tensor<float>(new TensorShape(nTotal, k_FeatureDim), mergedFlat);
 
             // weights 構築
             float[] weights = new float[nTotal];
