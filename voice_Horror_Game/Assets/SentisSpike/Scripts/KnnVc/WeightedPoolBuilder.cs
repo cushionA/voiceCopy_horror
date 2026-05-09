@@ -1,4 +1,4 @@
-// WeightedPoolBuilder.cs — Phase 7 Group B 実装
+// WeightedPoolBuilder.cs — Phase 7 Group B 実装 / Phase 8 Optim
 // voice_horror Phase 7 (2026-05-09)
 //
 // Responsibility:
@@ -12,6 +12,11 @@
 //   - α=0.5 で全 frame weight=0.5 (均等)
 //   - 任意 α で a 部分=α、b 部分=1-α
 //
+// Phase 8 最適化:
+//   旧: a.ToTensor() + b.ToTensor() でそれぞれ Tensor 確保 + DownloadToArray
+//   新: AsReadOnlyFlatSpan() で float[] 参照を直接取得 → 連結用 float[] に Buffer.BlockCopy
+//   alloc は連結後の new float[] と new Tensor<float> の 2 つだけになる。
+//
 // 関連 spec: MS-003
 // 関連 design: design.md component 2
 // 関連 tests: B-3 (B-3, B-3b, B-3c, B-3d)
@@ -23,6 +28,8 @@ namespace VoiceHorror.KnnVc
 {
     public static class WeightedPoolBuilder
     {
+        const int k_FeatureDim = 1024;
+
         /// <summary>
         /// 2 プールを連結して合成 features と weights を返す。
         /// features: a の全 frames + b の全 frames を順に並べた [N_total, 1024] Tensor
@@ -60,17 +67,16 @@ namespace VoiceHorror.KnnVc
 
             int nTotal = nA + nB;
 
-            // features 連結
-            using var ta = a.ToTensor();
-            using var tb = b.ToTensor();
-            float[] aFlat = ta.DownloadToArray();
-            float[] bFlat = tb.DownloadToArray();
-            int dim = ta.shape[1]; // 1024 想定
+            // Phase 8 最適化: ToTensor + DownloadToArray の二重 alloc を避けるため、
+            // pool 内部の flatten 済みキャッシュへの ReadOnlySpan を直接使って連結。
+            ReadOnlySpan<float> aFlat = a.AsReadOnlyFlatSpan();
+            ReadOnlySpan<float> bFlat = b.AsReadOnlyFlatSpan();
 
-            float[] mergedFlat = new float[nTotal * dim];
-            Array.Copy(aFlat, 0, mergedFlat, 0, aFlat.Length);
-            Array.Copy(bFlat, 0, mergedFlat, aFlat.Length, bFlat.Length);
-            var mergedTensor = new Tensor<float>(new TensorShape(nTotal, dim), mergedFlat);
+            float[] mergedFlat = new float[nTotal * k_FeatureDim];
+            Span<float> mergedSpan = new Span<float>(mergedFlat);
+            aFlat.CopyTo(mergedSpan);
+            bFlat.CopyTo(mergedSpan.Slice(aFlat.Length));
+            Tensor<float> mergedTensor = new Tensor<float>(new TensorShape(nTotal, k_FeatureDim), mergedFlat);
 
             // weights 構築
             float[] weights = new float[nTotal];

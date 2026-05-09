@@ -250,6 +250,62 @@ namespace VoiceHorror.KnnVc.Tests.EditMode
                 Assert.AreEqual(r1[d], r2[d], 1e-5f, $"result[{d}] mismatched between 1st and 2nd call");
         }
 
+        // ── PR #7 review 反映: tie-breaking + backend setter ─────────
+
+        [Test]
+        public void C7_Convert_AllMsFramesIdentical_NoNaNAndOutputMatches()
+        {
+            // 全 ms frame が同一ベクトル (= 全ペアで cos sim 同値、TopK tie)。
+            // Sentis TopK の tie-breaking は実装依存だが、
+            // どの indices が選ばれても出力 = ms frame と等しいはず。
+            using KnnVcConverter converter = new KnnVcConverter { TopK = 4 };
+
+            float[] msFlat = new float[50 * 1024];
+            for (int i = 0; i < 50; i++)
+                for (int d = 0; d < 1024; d++)
+                    msFlat[i * 1024 + d] = 0.5f;
+            using Tensor<float> ms = new Tensor<float>(new TensorShape(50, 1024), msFlat);
+            using Tensor<float> query = MakeUniformTensor(3, 1024, value: 0.7f);
+
+            using Tensor<float> result = converter.Convert(query, ms);
+            float[] r = result.DownloadToArray();
+            for (int q = 0; q < 3; q++)
+            {
+                for (int d = 0; d < 1024; d++)
+                {
+                    Assert.IsFalse(float.IsNaN(r[q * 1024 + d]));
+                    Assert.AreEqual(0.5f, r[q * 1024 + d], 1e-3f,
+                        $"r[{q},{d}] should equal ms value 0.5 regardless of tie-break");
+                }
+            }
+        }
+
+        [Test]
+        public void C8_Backend_Setter_RebuildsWorkerOnNextConvert()
+        {
+            // Backend setter で worker が破棄され、次回 Convert で再構築されること。
+            // 値変更しても結果が壊れない (CPU/GPU で数値一致 ε 範囲) を担保。
+            using KnnVcConverter converter = new KnnVcConverter { TopK = 4 };
+
+            using Tensor<float> q  = MakeRandomTensor(4, 1024, seed: 11);
+            using Tensor<float> ms = MakeRandomTensor(60, 1024, seed: 22);
+
+            float[] gpuResult;
+            using (Tensor<float> r = converter.Convert(q, ms)) gpuResult = r.DownloadToArray();
+
+            // backend を CPU に切替えて同入力で再実行
+            converter.Backend = BackendType.CPU;
+            float[] cpuResult;
+            using (Tensor<float> r = converter.Convert(q, ms)) cpuResult = r.DownloadToArray();
+
+            Assert.AreEqual(gpuResult.Length, cpuResult.Length);
+            // 浮動小数点の集約順序差で完全一致は望めないため、平均 L1 ≤ 1e-3 で十分
+            float l1 = 0f;
+            for (int i = 0; i < gpuResult.Length; i++) l1 += Mathf.Abs(gpuResult[i] - cpuResult[i]);
+            l1 /= gpuResult.Length;
+            Assert.Less(l1, 1e-3f, $"CPU/GPU 結果の平均 L1 = {l1}");
+        }
+
         // ── Helpers ───────────────────────────────────────────────────
 
         static Tensor<float> MakeRandomTensor(int n, int dim, int seed)

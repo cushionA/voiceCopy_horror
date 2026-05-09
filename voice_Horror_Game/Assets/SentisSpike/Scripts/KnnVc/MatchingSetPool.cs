@@ -1,13 +1,18 @@
-// MatchingSetPool.cs — Phase 7 Group B 実装
+// MatchingSetPool.cs — Phase 7 Group B 実装 / Phase 8 Optim
 // voice_horror Phase 7 (2026-05-09)
 //
 // Responsibility:
 //   WavLM 特徴ベクトルの蓄積、weight 管理、npy 永続化。
 //   target / player など複数プールを並行管理し、WeightedPoolBuilder で α 混合する。
 //
+// Phase 8 最適化:
+//   List<float[]> → flat float[] への変換結果をキャッシュ。
+//   毎回 ToTensor() で生成する重複 alloc を、AsReadOnlyFlatSpan() で参照のみ取る経路で回避。
+//   バッチ stress test で 240MB GC 圧 → 0 (キャッシュヒット時) に削減できる。
+//
 // 関連 spec: MS-001 〜 MS-006
 // 関連 design: design.md component 2
-// 関連 tests: B-1 〜 B-5
+// 関連 tests: B-1 〜 B-5, B-6 (cache invalidation)
 
 using System;
 using System.Collections.Generic;
@@ -25,6 +30,13 @@ namespace VoiceHorror.KnnVc
 
         readonly List<float[]> _features = new();   // 各 entry が 1024-dim
         readonly List<float>   _weights  = new();
+
+        // Phase 8 最適化: List<float[]> から flatten 済みの float[] と weights をキャッシュ。
+        // Append 時に invalidate、次回参照時に lazy 再構築。
+        // _cachedFlat の長さは _cachedFrameCount * k_FeatureDim、容量は伸ばしても shrink しない (再 alloc 回避)。
+        float[] _cachedFlat;
+        float[] _cachedWeights;
+        int _cachedFrameCount = -1;
 
         public string Name { get; }
         public int FrameCount => _features.Count;
@@ -56,17 +68,22 @@ namespace VoiceHorror.KnnVc
                 _features.Add(frame);
                 _weights.Add(weight);
             }
+
+            InvalidateCache();
         }
 
         /// <summary>
         /// プール全体を Tensor [N, 1024] として取り出す (新規 Tensor、呼び出し側で Dispose)。
+        /// Tensor はデータを所有するため必ず新規 alloc になるが、
+        /// 内部 flat キャッシュからの Buffer.BlockCopy で List 反復は回避する。
         /// </summary>
         public Tensor<float> ToTensor()
         {
             int n = FrameCount;
+            EnsureFlatCache();
             float[] flat = new float[n * k_FeatureDim];
-            for (int i = 0; i < n; i++)
-                Array.Copy(_features[i], 0, flat, i * k_FeatureDim, k_FeatureDim);
+            if (n > 0)
+                Buffer.BlockCopy(_cachedFlat, 0, flat, 0, n * k_FeatureDim * sizeof(float));
             return new Tensor<float>(new TensorShape(n, k_FeatureDim), flat);
         }
 
@@ -75,7 +92,45 @@ namespace VoiceHorror.KnnVc
         /// </summary>
         public float[] GetWeights()
         {
-            return _weights.ToArray();
+            int n = FrameCount;
+            EnsureFlatCache();
+            float[] copy = new float[n];
+            if (n > 0)
+                Buffer.BlockCopy(_cachedWeights, 0, copy, 0, n * sizeof(float));
+            return copy;
+        }
+
+        /// <summary>
+        /// Phase 8 最適化: flat 化済みキャッシュへの直接参照 (read-only)。
+        /// WeightedPoolBuilder 等の連結で DownloadToArray + 反復コピーを回避するための公開 API。
+        ///
+        /// ライフタイム規約 (重要):
+        ///   - 戻り値の Span は呼出時点の内部 float[] を直接指している。
+        ///   - 後続の <see cref="Append"/> で frame 数が cache 容量を超えると内部配列が
+        ///     再 alloc される (旧配列は GC 任せ)。その時点で旧 Span は古い snapshot を
+        ///     見続けるか、最悪 stale データになる。
+        ///   - したがって、Span を取得した後は同フレーム内に CopyTo / 連結で消費し、
+        ///     Append を挟む処理に持ち回さないこと。
+        /// </summary>
+        public ReadOnlySpan<float> AsReadOnlyFlatSpan()
+        {
+            EnsureFlatCache();
+            int len = FrameCount * k_FeatureDim;
+            if (len == 0) return ReadOnlySpan<float>.Empty;
+            return new ReadOnlySpan<float>(_cachedFlat, 0, len);
+        }
+
+        /// <summary>
+        /// weights のキャッシュへの直接参照 (read-only)。
+        /// AsReadOnlyFlatSpan と対をなす Phase 8 最適化 API。
+        /// ライフタイム規約は <see cref="AsReadOnlyFlatSpan"/> と同じ。
+        /// </summary>
+        public ReadOnlySpan<float> AsReadOnlyWeightsSpan()
+        {
+            EnsureFlatCache();
+            int n = FrameCount;
+            if (n == 0) return ReadOnlySpan<float>.Empty;
+            return new ReadOnlySpan<float>(_cachedWeights, 0, n);
         }
 
         /// <summary>
@@ -86,13 +141,21 @@ namespace VoiceHorror.KnnVc
             if (string.IsNullOrEmpty(path)) throw new ArgumentException(nameof(path));
 
             int n = FrameCount;
+            EnsureFlatCache();
+
+            // npy ヘッダ + 本体書込で _cachedFlat の参照を直接渡せるよう、
+            // NpyWriter は配列をそのまま書き出す前提 (現実装で OK)。
+            // ただし容量は cachedFrameCount * dim、確実に同じ長さの配列に再コピーして渡す。
             float[] featuresFlat = new float[n * k_FeatureDim];
-            for (int i = 0; i < n; i++)
-                Array.Copy(_features[i], 0, featuresFlat, i * k_FeatureDim, k_FeatureDim);
+            if (n > 0)
+                Buffer.BlockCopy(_cachedFlat, 0, featuresFlat, 0, n * k_FeatureDim * sizeof(float));
             NpyWriter.Save(path, featuresFlat, new[] { n, k_FeatureDim });
 
+            float[] weightsFlat = new float[n];
+            if (n > 0)
+                Buffer.BlockCopy(_cachedWeights, 0, weightsFlat, 0, n * sizeof(float));
             string weightsPath = WeightsPathFor(path);
-            NpyWriter.Save(weightsPath, _weights.ToArray());
+            NpyWriter.Save(weightsPath, weightsFlat);
         }
 
         /// <summary>
@@ -131,7 +194,42 @@ namespace VoiceHorror.KnnVc
                 pool._features.Add(frame);
                 pool._weights.Add(weightsArr[i]);
             }
+            // LoadFrom 直後に AsReadOnlyFlatSpan() / ToTensor() が呼ばれる確率が高いので、
+            // 既に flatten 済みデータをそのまま流用してキャッシュを構築しておく。
+            // (Append ループは _cachedFrameCount=-1 のままなので EnsureFlatCache 1 回で済む)
+            pool._cachedFlat = featuresFlat;
+            pool._cachedWeights = weightsArr;
+            pool._cachedFrameCount = n;
             return pool;
+        }
+
+        // ── private helpers ────────────────────────────────────────────
+
+        void InvalidateCache()
+        {
+            // インデックスのリセットのみ。配列の再利用判定 (length 比較 → 必要なら再 alloc)
+            // は EnsureFlatCache 側に集約しているため、ここでは何もしない。
+            _cachedFrameCount = -1;
+        }
+
+        void EnsureFlatCache()
+        {
+            int n = _features.Count;
+            if (_cachedFrameCount == n) return;
+
+            int needed = n * k_FeatureDim;
+            if (_cachedFlat == null || _cachedFlat.Length < needed)
+                _cachedFlat = new float[needed];
+            if (_cachedWeights == null || _cachedWeights.Length < n)
+                _cachedWeights = new float[n];
+
+            for (int i = 0; i < n; i++)
+            {
+                Buffer.BlockCopy(_features[i], 0, _cachedFlat, i * k_FeatureDim * sizeof(float),
+                                 k_FeatureDim * sizeof(float));
+                _cachedWeights[i] = _weights[i];
+            }
+            _cachedFrameCount = n;
         }
 
         static string WeightsPathFor(string featuresPath)

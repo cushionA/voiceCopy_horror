@@ -11,6 +11,7 @@
 // Note: ToTensor() / GetWeights() の Sentis Tensor 部分は EditMode でも動作確認可
 //       (Sentis Worker は不要、Tensor の確保のみ)
 
+using System;
 using System.IO;
 using NUnit.Framework;
 using Unity.InferenceEngine;
@@ -237,6 +238,63 @@ namespace VoiceHorror.KnnVc.Tests.EditMode
 
             Assert.AreEqual(0.3f, pool.Coverage5MinRatio, 1e-3f,
                 "4500 frames = 1.5 分で Coverage = 0.3");
+        }
+
+        // ── B-6: Phase 8 flat キャッシュ ─────────────────────────────
+
+        [Test]
+        public void B6_AsReadOnlyFlatSpan_EmptyPool_ReturnsEmpty()
+        {
+            var pool = new MatchingSetPool("test");
+            var span = pool.AsReadOnlyFlatSpan();
+            Assert.AreEqual(0, span.Length);
+
+            var wSpan = pool.AsReadOnlyWeightsSpan();
+            Assert.AreEqual(0, wSpan.Length);
+        }
+
+        [Test]
+        public void B6b_AsReadOnlyFlatSpan_AfterAppend_MatchesToTensorContents()
+        {
+            var pool = new MatchingSetPool("test");
+            using (var feats = MakeRandomFeatures(7, 1024, seed: 11))
+                pool.Append(feats, weight: 0.4f);
+
+            using var t = pool.ToTensor();
+            float[] expected = t.DownloadToArray();
+            ReadOnlySpan<float> got = pool.AsReadOnlyFlatSpan();
+
+            Assert.AreEqual(expected.Length, got.Length);
+            for (int i = 0; i < expected.Length; i++)
+                Assert.AreEqual(expected[i], got[i], 1e-6f, $"flat[{i}]");
+
+            ReadOnlySpan<float> w = pool.AsReadOnlyWeightsSpan();
+            Assert.AreEqual(7, w.Length);
+            for (int i = 0; i < 7; i++) Assert.AreEqual(0.4f, w[i], 1e-6f, $"w[{i}]");
+        }
+
+        [Test]
+        public void B6c_Append_InvalidatesCache_ReflectsNewFrames()
+        {
+            var pool = new MatchingSetPool("test");
+            using (var f1 = MakeRandomFeatures(5, 1024, seed: 1))
+                pool.Append(f1, weight: 0.7f);
+
+            // 1 回目アクセスでキャッシュ構築
+            ReadOnlySpan<float> first = pool.AsReadOnlyFlatSpan();
+            Assert.AreEqual(5 * 1024, first.Length);
+
+            // 追加 append でキャッシュ無効化されるはず
+            using (var f2 = MakeRandomFeatures(3, 1024, seed: 2))
+                pool.Append(f2, weight: 0.2f);
+
+            ReadOnlySpan<float> second = pool.AsReadOnlyFlatSpan();
+            Assert.AreEqual(8 * 1024, second.Length, "append 後の長さが反映されること");
+
+            ReadOnlySpan<float> w = pool.AsReadOnlyWeightsSpan();
+            Assert.AreEqual(8, w.Length);
+            for (int i = 0; i < 5; i++) Assert.AreEqual(0.7f, w[i], 1e-6f, $"w[{i}] 旧 frame");
+            for (int i = 5; i < 8; i++) Assert.AreEqual(0.2f, w[i], 1e-6f, $"w[{i}] 新 frame");
         }
 
         // ── Helpers ───────────────────────────────────────────────────
