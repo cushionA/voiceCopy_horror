@@ -1,5 +1,7 @@
-// WavLMFeatureExtractorTests.cs — Phase 7 Group A (TDD Red)
+// WavLMFeatureExtractorTests.cs — Phase 7 Group A (EditMode)
 // voice_horror Phase 7 (2026-05-09)
+//
+// EditMode で動作確認 (Sentis Worker は EditMode でも動く、Phase 6 KnnVcSentisLoadTest 実証済)。
 //
 // Coverage:
 //   A-1: 16kHz mono float[] からの特徴抽出 (output shape, NaN/Inf)
@@ -14,7 +16,7 @@ using UnityEditor;
 using UnityEngine;
 using VoiceHorror.KnnVc;
 
-namespace VoiceHorror.KnnVc.Tests
+namespace VoiceHorror.KnnVc.Tests.EditMode
 {
     [TestFixture]
     public class WavLMFeatureExtractorTests
