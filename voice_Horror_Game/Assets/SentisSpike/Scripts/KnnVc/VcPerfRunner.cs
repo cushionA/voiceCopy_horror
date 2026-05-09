@@ -250,49 +250,69 @@ namespace VoiceHorror.KnnVc
 
         // ── IMGUI 表示 ───────────────────────────────────────────────────
 
+        // 大きめフォント (高解像度ディスプレイ対策)
+        static GUIStyle s_labelStyle;
+        static GUIStyle s_titleStyle;
+        static GUIStyle s_buttonStyle;
+
+        static void EnsureStyles()
+        {
+            if (s_labelStyle == null)
+            {
+                s_labelStyle = new GUIStyle(GUI.skin.label) { fontSize = 18 };
+                s_titleStyle = new GUIStyle(GUI.skin.box) { fontSize = 20, alignment = TextAnchor.UpperLeft, fontStyle = FontStyle.Bold };
+                s_buttonStyle = new GUIStyle(GUI.skin.button) { fontSize = 18 };
+            }
+        }
+
         void OnGUI()
         {
-            const int w = 560, h = 200;
-            GUI.Box(new Rect(10, 10, w, h), "kNN-VC Perf Runner (per-stage breakdown: Profiler 'VC.*' markers)");
-            int y = 32;
-            GUI.Label(new Rect(20, y, w - 20, 22), _statusLine); y += 22;
-            GUI.Label(new Rect(20, y, w - 20, 22), "[1..4] convert  [B] batch  [R] reset  [S] save CSV"); y += 24;
+            EnsureStyles();
+            const int w = 880, h = 320;
+            const int pad = 18;
+            GUI.Box(new Rect(10, 10, w, h), "kNN-VC Perf Runner — per-stage breakdown: Profiler 'VC.*' markers", s_titleStyle);
 
-            // ボタン (focus 不要、Game view 画面クリックで動く)
-            using (new GUI.GroupScope(new Rect(20, y, w - 20, 24)))
-            {
-                if (GUI.Button(new Rect(0,   0, 50, 22), "1")) ConvertOne(0);
-                if (GUI.Button(new Rect(54,  0, 50, 22), "2")) ConvertOne(1);
-                if (GUI.Button(new Rect(108, 0, 50, 22), "3")) ConvertOne(2);
-                if (GUI.Button(new Rect(162, 0, 50, 22), "4")) ConvertOne(3);
-                if (GUI.Button(new Rect(220, 0, 70, 22), "Batch") && !_busy) StartCoroutine(RunBatch());
-                if (GUI.Button(new Rect(294, 0, 60, 22), "Reset")) ResetStats();
-                if (GUI.Button(new Rect(358, 0, 80, 22), "Save CSV")) SaveCsv();
-            }
-            y += 28;
+            int y = 56;
+            GUI.Label(new Rect(pad + 10, y, w - pad * 2, 28), _statusLine, s_labelStyle); y += 32;
+            GUI.Label(new Rect(pad + 10, y, w - pad * 2, 28), "[1..4] convert   [B] batch   [R] reset   [S] save CSV", s_labelStyle); y += 36;
 
-            DrawHeader(y); y += 20;
+            // ボタン
+            int bx = pad + 10;
+            int bw = 60;
+            int bh = 32;
+            if (GUI.Button(new Rect(bx, y, bw, bh), "1", s_buttonStyle)) ConvertOne(0); bx += bw + 6;
+            if (GUI.Button(new Rect(bx, y, bw, bh), "2", s_buttonStyle)) ConvertOne(1); bx += bw + 6;
+            if (GUI.Button(new Rect(bx, y, bw, bh), "3", s_buttonStyle)) ConvertOne(2); bx += bw + 6;
+            if (GUI.Button(new Rect(bx, y, bw, bh), "4", s_buttonStyle)) ConvertOne(3); bx += bw + 16;
+            if (GUI.Button(new Rect(bx, y, 110, bh), "Batch", s_buttonStyle) && !_busy) StartCoroutine(RunBatch()); bx += 116;
+            if (GUI.Button(new Rect(bx, y, 90,  bh), "Reset", s_buttonStyle)) ResetStats(); bx += 96;
+            if (GUI.Button(new Rect(bx, y, 130, bh), "Save CSV", s_buttonStyle)) SaveCsv();
+            y += bh + 14;
+
+            DrawHeader(y); y += 30;
             DrawRow(y, "total", _total);
         }
 
         static void DrawHeader(int y)
         {
-            GUI.Label(new Rect(20, y, 80, 18), "stage");
-            GUI.Label(new Rect(100, y, 70, 18), "count");
-            GUI.Label(new Rect(170, y, 80, 18), "mean");
-            GUI.Label(new Rect(250, y, 80, 18), "min");
-            GUI.Label(new Rect(330, y, 80, 18), "max");
-            GUI.Label(new Rect(410, y, 80, 18), "p95");
+            const int x0 = 28;
+            GUI.Label(new Rect(x0,        y, 110, 26), "stage", s_labelStyle);
+            GUI.Label(new Rect(x0 + 130,  y, 100, 26), "count", s_labelStyle);
+            GUI.Label(new Rect(x0 + 240,  y, 130, 26), "mean", s_labelStyle);
+            GUI.Label(new Rect(x0 + 380,  y, 130, 26), "min", s_labelStyle);
+            GUI.Label(new Rect(x0 + 520,  y, 130, 26), "max", s_labelStyle);
+            GUI.Label(new Rect(x0 + 660,  y, 130, 26), "p95", s_labelStyle);
         }
 
         static void DrawRow(int y, string label, StageStats s)
         {
-            GUI.Label(new Rect(20, y, 80, 18), label);
-            GUI.Label(new Rect(100, y, 70, 18), s.count.ToString());
-            GUI.Label(new Rect(170, y, 80, 18), $"{s.MeanMs:F0}ms");
-            GUI.Label(new Rect(250, y, 80, 18), s.count > 0 ? $"{s.minMs:F0}ms" : "-");
-            GUI.Label(new Rect(330, y, 80, 18), s.count > 0 ? $"{s.maxMs:F0}ms" : "-");
-            GUI.Label(new Rect(410, y, 80, 18), s.count > 0 ? $"{s.P95Ms:F0}ms" : "-");
+            const int x0 = 28;
+            GUI.Label(new Rect(x0,        y, 110, 26), label, s_labelStyle);
+            GUI.Label(new Rect(x0 + 130,  y, 100, 26), s.count.ToString(), s_labelStyle);
+            GUI.Label(new Rect(x0 + 240,  y, 130, 26), $"{s.MeanMs:F0}ms", s_labelStyle);
+            GUI.Label(new Rect(x0 + 380,  y, 130, 26), s.count > 0 ? $"{s.minMs:F0}ms" : "-", s_labelStyle);
+            GUI.Label(new Rect(x0 + 520,  y, 130, 26), s.count > 0 ? $"{s.maxMs:F0}ms" : "-", s_labelStyle);
+            GUI.Label(new Rect(x0 + 660,  y, 130, 26), s.count > 0 ? $"{s.P95Ms:F0}ms" : "-", s_labelStyle);
         }
     }
 }
