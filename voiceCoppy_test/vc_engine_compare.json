@@ -1,0 +1,843 @@
+{
+  "id": "vh-vc-compare-001",
+  "revision": 0,
+  "last_node_id": 80,
+  "last_link_id": 80,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "MarkdownNote",
+      "pos": [
+        -200,
+        -380
+      ],
+      "size": [
+        1700,
+        320
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "# voice_horror — VC エンジン 3 種並列比較\n\n**目的**: TTS-Audio-Suite で zero-shot VC をサポートする 3 エンジンを **同じ入力で並列実行**して品質を聴き比べる。\n\n## なぜこれをやるか\n\nユーザー指摘: 「音→音の変換でいいなら Qwen 不要」 — その通り。VC 路線では LLM 部分は完全にデッドウェイトなので、純 VC エンジンに集中する。\n\n## 比較する 3 エンジン (全て zero-shot、事前学習不要)\n\n| エンジン | 内部モデル | サイズ | 特徴 |\n|---------|----------|--------|------|\n| **ChatterBox** (通常) | `ResembleAI/chatterbox` (English) | ~500MB | 英語訓練、日本語は未公式 |\n| **ChatterBox Official 23-Lang v2** | `t3_mtl23ls_v2.safetensors` (多言語) | ~500MB | **日本語ネイティブ対応** |\n| **CosyVoice3 0.5B-RL** | `Fun-CosyVoice3-0.5B-RL` | ~1GB | 中国語強い、日本語含む多言語 |\n\n本命方向 (★): `girl_jp.wav` (少女声) → `my_sampleVoice.wav` (自分の声色) で 3 エンジンを並列実行。\n\n## 評価\n\n各エンジンの出力 WAV を保存 (`vh_vc_*.wav`) して聴き比べ:\n\n1. プレイヤー声と認識できる声色か\n2. 内容（少女セリフの発音・抑揚）が保持されているか\n3. ノイズ・歪みの有無\n4. 推論時間\n\n→ 最良エンジンを voice_horror の本命に決定し、Unity 統合検討に進む。\n\n## 排除した候補\n\n- **Qwen3-TTS** — TTS で重い (5-10GB)、VC には不要\n- **F5-TTS** — TTS-Audio-Suite で VC 非対応\n- **RVC** — 事前学習必須、NG\n- **BERT-VITS2 / AivisSpeech** — AGPL v3、Steam 商用配信不可"
+      ],
+      "color": "#223",
+      "bgcolor": "#335"
+    },
+    {
+      "id": 2,
+      "type": "LoadAudio",
+      "pos": [
+        -1900,
+        40
+      ],
+      "size": [
+        270,
+        136
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "AUDIO",
+          "type": "AUDIO",
+          "links": [
+            11,
+            21,
+            31
+          ]
+        }
+      ],
+      "title": "source: girl_jp.wav (少女、内容を保持)",
+      "properties": {
+        "Node name for S&R": "LoadAudio",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.48"
+      },
+      "widgets_values": [
+        "girl_jp.wav",
+        null,
+        null
+      ],
+      "color": "#323",
+      "bgcolor": "#535"
+    },
+    {
+      "id": 3,
+      "type": "LoadAudio",
+      "pos": [
+        -1900,
+        220
+      ],
+      "size": [
+        270,
+        136
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "AUDIO",
+          "type": "AUDIO",
+          "links": [
+            12,
+            22,
+            32
+          ]
+        }
+      ],
+      "title": "narrator_target: my_sampleVoice.wav (自分の声色)",
+      "properties": {
+        "Node name for S&R": "LoadAudio",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.48"
+      },
+      "widgets_values": [
+        "my_sampleVoice.wav",
+        null,
+        null
+      ],
+      "color": "#323",
+      "bgcolor": "#535"
+    },
+    {
+      "id": 10,
+      "type": "MarkdownNote",
+      "pos": [
+        -1550,
+        -10
+      ],
+      "size": [
+        340,
+        60
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "## 行 1: ChatterBox (通常版、English-only)"
+      ],
+      "color": "#243",
+      "bgcolor": "#355"
+    },
+    {
+      "id": 11,
+      "type": "ChatterBoxEngineNode",
+      "pos": [
+        -1550,
+        70
+      ],
+      "size": [
+        305,
+        178
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "TTS_engine",
+          "type": "TTS_ENGINE",
+          "links": [
+            10
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ChatterBoxEngineNode"
+      },
+      "widgets_values": [
+        "English",
+        "auto",
+        0.5,
+        0.8,
+        0.5,
+        "hmm ,, {seg} hmm ,,"
+      ],
+      "color": "#233",
+      "bgcolor": "#355"
+    },
+    {
+      "id": 12,
+      "type": "UnifiedVoiceChangerNode",
+      "pos": [
+        -1200,
+        70
+      ],
+      "size": [
+        340,
+        130
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "TTS_engine",
+          "type": "TTS_ENGINE",
+          "link": 10
+        },
+        {
+          "name": "source_audio",
+          "type": "*",
+          "link": 11
+        },
+        {
+          "name": "narrator_target",
+          "type": "*",
+          "link": 12
+        }
+      ],
+      "outputs": [
+        {
+          "name": "converted_audio",
+          "type": "AUDIO",
+          "links": [
+            13,
+            14
+          ]
+        },
+        {
+          "name": "conversion_info",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "UnifiedVoiceChangerNode",
+        "cnr_id": "chatterbox_srt_voice"
+      },
+      "widgets_values": [
+        1,
+        30,
+        "smart"
+      ],
+      "color": "#223",
+      "bgcolor": "#335"
+    },
+    {
+      "id": 13,
+      "type": "PreviewAudio",
+      "pos": [
+        -830,
+        70
+      ],
+      "size": [
+        320,
+        76
+      ],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "link": 13
+        }
+      ],
+      "outputs": [],
+      "title": "Preview: ChatterBox 通常版",
+      "properties": {
+        "Node name for S&R": "PreviewAudio",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.48"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 14,
+      "type": "SaveAudio",
+      "pos": [
+        -830,
+        160
+      ],
+      "size": [
+        320,
+        76
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "link": 14
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "SaveAudio",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.48"
+      },
+      "widgets_values": [
+        "vh_vc_engine_chatterbox"
+      ]
+    },
+    {
+      "id": 20,
+      "type": "MarkdownNote",
+      "pos": [
+        -1550,
+        280
+      ],
+      "size": [
+        340,
+        60
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "## 行 2 ★: ChatterBox 23-Lang v2 (Japanese)"
+      ],
+      "color": "#244",
+      "bgcolor": "#355"
+    },
+    {
+      "id": 21,
+      "type": "ChatterBoxOfficial23LangEngineNode",
+      "pos": [
+        -1550,
+        360
+      ],
+      "size": [
+        340,
+        280
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "TTS_engine",
+          "type": "TTS_ENGINE",
+          "links": [
+            20
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ChatterBoxOfficial23LangEngineNode"
+      },
+      "widgets_values": [
+        "v2",
+        "English",
+        "auto",
+        1.0,
+        0.8,
+        0.5,
+        2.0,
+        0.05,
+        1.0
+      ],
+      "color": "#233",
+      "bgcolor": "#355"
+    },
+    {
+      "id": 22,
+      "type": "UnifiedVoiceChangerNode",
+      "pos": [
+        -1200,
+        360
+      ],
+      "size": [
+        340,
+        130
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "TTS_engine",
+          "type": "TTS_ENGINE",
+          "link": 20
+        },
+        {
+          "name": "source_audio",
+          "type": "*",
+          "link": 21
+        },
+        {
+          "name": "narrator_target",
+          "type": "*",
+          "link": 22
+        }
+      ],
+      "outputs": [
+        {
+          "name": "converted_audio",
+          "type": "AUDIO",
+          "links": [
+            23,
+            24
+          ]
+        },
+        {
+          "name": "conversion_info",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "UnifiedVoiceChangerNode",
+        "cnr_id": "chatterbox_srt_voice"
+      },
+      "widgets_values": [
+        1,
+        30,
+        "smart"
+      ],
+      "color": "#223",
+      "bgcolor": "#335"
+    },
+    {
+      "id": 23,
+      "type": "PreviewAudio",
+      "pos": [
+        -830,
+        360
+      ],
+      "size": [
+        320,
+        76
+      ],
+      "flags": {},
+      "order": 14,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "link": 23
+        }
+      ],
+      "outputs": [],
+      "title": "Preview: ChatterBox 23-Lang ★本命",
+      "properties": {
+        "Node name for S&R": "PreviewAudio",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.48"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 24,
+      "type": "SaveAudio",
+      "pos": [
+        -830,
+        450
+      ],
+      "size": [
+        320,
+        76
+      ],
+      "flags": {},
+      "order": 15,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "link": 24
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "SaveAudio",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.48"
+      },
+      "widgets_values": [
+        "vh_vc_engine_chatterbox23lang"
+      ]
+    },
+    {
+      "id": 30,
+      "type": "MarkdownNote",
+      "pos": [
+        -1550,
+        670
+      ],
+      "size": [
+        340,
+        60
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "## 行 3: CosyVoice3 0.5B-RL (多言語、ZH/JP/EN)"
+      ],
+      "color": "#243",
+      "bgcolor": "#355"
+    },
+    {
+      "id": 31,
+      "type": "CosyVoiceEngineNode",
+      "pos": [
+        -1550,
+        750
+      ],
+      "size": [
+        340,
+        230
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "TTS_engine",
+          "type": "TTS_ENGINE",
+          "links": [
+            30
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "CosyVoiceEngineNode"
+      },
+      "widgets_values": [
+        "Fun-CosyVoice3-0.5B-RL",
+        "auto",
+        1.0,
+        true,
+        "",
+        false,
+        false
+      ],
+      "color": "#233",
+      "bgcolor": "#355"
+    },
+    {
+      "id": 32,
+      "type": "UnifiedVoiceChangerNode",
+      "pos": [
+        -1200,
+        750
+      ],
+      "size": [
+        340,
+        130
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "TTS_engine",
+          "type": "TTS_ENGINE",
+          "link": 30
+        },
+        {
+          "name": "source_audio",
+          "type": "*",
+          "link": 31
+        },
+        {
+          "name": "narrator_target",
+          "type": "*",
+          "link": 32
+        }
+      ],
+      "outputs": [
+        {
+          "name": "converted_audio",
+          "type": "AUDIO",
+          "links": [
+            33,
+            34
+          ]
+        },
+        {
+          "name": "conversion_info",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "UnifiedVoiceChangerNode",
+        "cnr_id": "chatterbox_srt_voice"
+      },
+      "widgets_values": [
+        1,
+        20,
+        "smart"
+      ],
+      "color": "#223",
+      "bgcolor": "#335"
+    },
+    {
+      "id": 33,
+      "type": "PreviewAudio",
+      "pos": [
+        -830,
+        750
+      ],
+      "size": [
+        320,
+        76
+      ],
+      "flags": {},
+      "order": 16,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "link": 33
+        }
+      ],
+      "outputs": [],
+      "title": "Preview: CosyVoice3",
+      "properties": {
+        "Node name for S&R": "PreviewAudio",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.48"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 34,
+      "type": "SaveAudio",
+      "pos": [
+        -830,
+        840
+      ],
+      "size": [
+        320,
+        76
+      ],
+      "flags": {},
+      "order": 17,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "audio",
+          "type": "AUDIO",
+          "link": 34
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "SaveAudio",
+        "cnr_id": "comfy-core",
+        "ver": "0.3.48"
+      },
+      "widgets_values": [
+        "vh_vc_engine_cosyvoice"
+      ]
+    }
+  ],
+  "links": [
+    [
+      10,
+      11,
+      0,
+      12,
+      0,
+      "TTS_ENGINE"
+    ],
+    [
+      11,
+      2,
+      0,
+      12,
+      1,
+      "*"
+    ],
+    [
+      12,
+      3,
+      0,
+      12,
+      2,
+      "*"
+    ],
+    [
+      13,
+      12,
+      0,
+      13,
+      0,
+      "AUDIO"
+    ],
+    [
+      14,
+      12,
+      0,
+      14,
+      0,
+      "AUDIO"
+    ],
+    [
+      20,
+      21,
+      0,
+      22,
+      0,
+      "TTS_ENGINE"
+    ],
+    [
+      21,
+      2,
+      0,
+      22,
+      1,
+      "*"
+    ],
+    [
+      22,
+      3,
+      0,
+      22,
+      2,
+      "*"
+    ],
+    [
+      23,
+      22,
+      0,
+      23,
+      0,
+      "AUDIO"
+    ],
+    [
+      24,
+      22,
+      0,
+      24,
+      0,
+      "AUDIO"
+    ],
+    [
+      30,
+      31,
+      0,
+      32,
+      0,
+      "TTS_ENGINE"
+    ],
+    [
+      31,
+      2,
+      0,
+      32,
+      1,
+      "*"
+    ],
+    [
+      32,
+      3,
+      0,
+      32,
+      2,
+      "*"
+    ],
+    [
+      33,
+      32,
+      0,
+      33,
+      0,
+      "AUDIO"
+    ],
+    [
+      34,
+      32,
+      0,
+      34,
+      0,
+      "AUDIO"
+    ]
+  ],
+  "groups": [
+    {
+      "id": 1,
+      "title": "Audio inputs (共通)",
+      "bounding": [
+        -1910,
+        -30,
+        320,
+        410
+      ],
+      "color": "#8AA",
+      "font_size": 22,
+      "flags": {}
+    },
+    {
+      "id": 2,
+      "title": "Engine 1: ChatterBox 通常版 (English)",
+      "bounding": [
+        -1560,
+        -50,
+        1080,
+        290
+      ],
+      "color": "#A88",
+      "font_size": 22,
+      "flags": {}
+    },
+    {
+      "id": 3,
+      "title": "Engine 2: ChatterBox Official 23-Lang v2 ★本命 (Japanese)",
+      "bounding": [
+        -1560,
+        250,
+        1080,
+        390
+      ],
+      "color": "#AA4",
+      "font_size": 22,
+      "flags": {}
+    },
+    {
+      "id": 4,
+      "title": "Engine 3: CosyVoice3 0.5B-RL (多言語)",
+      "bounding": [
+        -1560,
+        660,
+        1080,
+        290
+      ],
+      "color": "#A88",
+      "font_size": 22,
+      "flags": {}
+    }
+  ],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.65,
+      "offset": [
+        2200,
+        600
+      ]
+    },
+    "frontendVersion": "1.23.4"
+  },
+  "version": 0.4
+}
