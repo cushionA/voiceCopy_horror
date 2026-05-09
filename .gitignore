@@ -149,3 +149,6 @@ __pycache__/
 voice_Horror_Game/VcDebugOut/
 voiceCoppy_test/sentis_spike/
 VcTestOutput/
+# E2E Tester / PerfRunner が TestSounds に出す変換結果も追跡しない
+voice_Horror_Game/Assets/SentisSpike/TestSounds/knn_vc_output.wav
+voice_Horror_Game/Assets/SentisSpike/TestSounds/knn_vc_output.wav.meta
