@@ -2,7 +2,8 @@
     "name": "voice_horror.Sentis",
     "rootNamespace": "VoiceHorror",
     "references": [
-        "Unity.InferenceEngine"
+        "Unity.InferenceEngine",
+        "Unity.InputSystem"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

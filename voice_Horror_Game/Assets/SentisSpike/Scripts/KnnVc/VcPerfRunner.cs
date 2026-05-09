@@ -25,6 +25,7 @@ using System.IO;
 using System.Text;
 using Unity.Profiling;
 using UnityEngine;
+using UnityEngine.InputSystem;
 using Debug = UnityEngine.Debug;
 
 namespace VoiceHorror.KnnVc
@@ -143,13 +144,16 @@ namespace VoiceHorror.KnnVc
         {
             if (!_ready || _busy) return;
 
-            if (Input.GetKeyDown(KeyCode.Alpha1)) ConvertOne(0);
-            if (Input.GetKeyDown(KeyCode.Alpha2)) ConvertOne(1);
-            if (Input.GetKeyDown(KeyCode.Alpha3)) ConvertOne(2);
-            if (Input.GetKeyDown(KeyCode.Alpha4)) ConvertOne(3);
-            if (Input.GetKeyDown(KeyCode.B))      StartCoroutine(RunBatch());
-            if (Input.GetKeyDown(KeyCode.R))      ResetStats();
-            if (Input.GetKeyDown(KeyCode.S))      SaveCsv();
+            var kb = Keyboard.current;
+            if (kb == null) return; // headless 等で keyboard 無し
+
+            if (kb.digit1Key.wasPressedThisFrame) ConvertOne(0);
+            if (kb.digit2Key.wasPressedThisFrame) ConvertOne(1);
+            if (kb.digit3Key.wasPressedThisFrame) ConvertOne(2);
+            if (kb.digit4Key.wasPressedThisFrame) ConvertOne(3);
+            if (kb.bKey.wasPressedThisFrame)      StartCoroutine(RunBatch());
+            if (kb.rKey.wasPressedThisFrame)      ResetStats();
+            if (kb.sKey.wasPressedThisFrame)      SaveCsv();
         }
 
         // ── Operations ──────────────────────────────────────────────────
@@ -248,11 +252,24 @@ namespace VoiceHorror.KnnVc
 
         void OnGUI()
         {
-            const int w = 540, h = 140;
+            const int w = 560, h = 200;
             GUI.Box(new Rect(10, 10, w, h), "kNN-VC Perf Runner (per-stage breakdown: Profiler 'VC.*' markers)");
             int y = 32;
             GUI.Label(new Rect(20, y, w - 20, 22), _statusLine); y += 22;
-            GUI.Label(new Rect(20, y, w - 20, 22), "[1..4] convert  [B] batch  [R] reset  [S] save CSV"); y += 26;
+            GUI.Label(new Rect(20, y, w - 20, 22), "[1..4] convert  [B] batch  [R] reset  [S] save CSV"); y += 24;
+
+            // ボタン (focus 不要、Game view 画面クリックで動く)
+            using (new GUI.GroupScope(new Rect(20, y, w - 20, 24)))
+            {
+                if (GUI.Button(new Rect(0,   0, 50, 22), "1")) ConvertOne(0);
+                if (GUI.Button(new Rect(54,  0, 50, 22), "2")) ConvertOne(1);
+                if (GUI.Button(new Rect(108, 0, 50, 22), "3")) ConvertOne(2);
+                if (GUI.Button(new Rect(162, 0, 50, 22), "4")) ConvertOne(3);
+                if (GUI.Button(new Rect(220, 0, 70, 22), "Batch") && !_busy) StartCoroutine(RunBatch());
+                if (GUI.Button(new Rect(294, 0, 60, 22), "Reset")) ResetStats();
+                if (GUI.Button(new Rect(358, 0, 80, 22), "Save CSV")) SaveCsv();
+            }
+            y += 28;
 
             DrawHeader(y); y += 20;
             DrawRow(y, "total", _total);
