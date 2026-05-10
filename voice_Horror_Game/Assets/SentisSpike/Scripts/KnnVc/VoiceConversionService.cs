@@ -19,11 +19,13 @@
 
 using System;
 using System.Collections;
+using System.Diagnostics;
 using System.IO;
 using Unity.InferenceEngine;
 using Unity.Profiling;
 using UnityEngine;
 using VoiceHorror.VC; // WavWriter / NpyWriter
+using Debug = UnityEngine.Debug;
 
 namespace VoiceHorror.KnnVc
 {
@@ -133,37 +135,147 @@ namespace VoiceHorror.KnnVc
         }
 
         /// <summary>
-        /// 変換: source の発話内容を target 声色で再生する (alpha=1.0)、
-        /// あるいは α 比率で target / player を混合する。
+        /// 変換各段階の elapsed 内訳。Stopwatch ベース (ProfilerMarker と独立)。
+        /// 量子化比較ランナーや perf 計測の細粒度分析に使う。
+        /// </summary>
+        public struct ConversionTimings
+        {
+            public double extractMs; // WavLM forward
+            public double knnMs;     // KnnVcConverter (GPU graph)
+            public double vocodeMs;  // HiFiGAN forward + peak normalize
+            public double totalMs;   // 上記の和に近いが、間の reshape / readback も含む
+        }
+
+        /// <summary>
+        /// 既存 API: 変換した AudioClip のみ返す。timings は捨てる。
         /// 戻り値の AudioClip は呼び出し側で再生・破棄。
         /// </summary>
         public AudioClip Convert(AudioClip source, float targetWeightAlpha = 1.0f)
+            => Convert(source, targetWeightAlpha, out _);
+
+        /// <summary>
+        /// 変換 + timings 内訳取得。
+        /// source の発話内容を target 声色で再生する (alpha=1.0)、
+        /// あるいは α 比率で target / player を混合する。
+        /// 戻り値の AudioClip は呼び出し側で再生・破棄。
+        /// </summary>
+        public AudioClip Convert(AudioClip source, float targetWeightAlpha, out ConversionTimings timings)
         {
             EnsureInitialized();
             if (source == null) throw new ArgumentNullException(nameof(source));
 
-            using var _ = s_TotalMarker.Auto();
+            using ProfilerMarker.AutoScope _ = s_TotalMarker.Auto();
+            Stopwatch swTotal = Stopwatch.StartNew();
 
             // Step 1: query 特徴抽出
-            using var query2D = ExtractQuery2D(source);
+            Stopwatch swExtract = Stopwatch.StartNew();
+            Tensor<float> query2D = ExtractQuery2D(source);
+            swExtract.Stop();
 
-            // Step 2: 重みつき合成プール構築 (using で例外時のリーク防止)
-            var (mergedFeatsRaw, mergedWeights) = WeightedPoolBuilder.Build(
-                TargetPool, PlayerPool, targetWeightAlpha);
-            using var mergedFeats = mergedFeatsRaw;
+            // Step 2-5: kNN + vocode + AudioClip 化 (query2D の所有権を helper に渡す)
+            AudioClip clip = RunKnnAndVocode(query2D, disposeQuery: true,
+                                             targetWeightAlpha,
+                                             out double knnMs, out double vocodeMs);
 
-            // Step 3: kNN 変換
-            using var converted2D = _converter.Convert(query2D, mergedFeats, mergedWeights);
+            swTotal.Stop();
 
-            // Step 4: HiFiGAN vocode (channel-last (1, T_frame, 1024) に reshape)
+            timings = new ConversionTimings
+            {
+                extractMs = swExtract.Elapsed.TotalMilliseconds,
+                knnMs     = knnMs,
+                vocodeMs  = vocodeMs,
+                totalMs   = swTotal.Elapsed.TotalMilliseconds,
+            };
+            return clip;
+        }
+
+        /// <summary>
+        /// 事前トークン化用: source AudioClip を WavLM forward して query features [N, 1024] を返す。
+        /// 配布時に固定の source (少女セリフ等) を起動時/ゲームロード時にここで一括 tokenize し、
+        /// 演出時の Convert は <see cref="Convert(Tensor{float},float,out ConversionTimings)"/>
+        /// に切り替えれば WavLM forward ステージ (~250ms) を完全省略できる。
+        ///
+        /// 戻り値の Tensor は呼び出し側で Dispose する責任 (キャッシュ寿命に応じて保持)。
+        /// </summary>
+        public Tensor<float> ExtractQueryFeatures(AudioClip source)
+        {
+            EnsureInitialized();
+            if (source == null) throw new ArgumentNullException(nameof(source));
+            return ExtractQuery2D(source);
+        }
+
+        /// <summary>
+        /// 事前トークン化された query features を入力に取り、WavLM forward を skip して変換する。
+        /// 入力 features は (N, 1024) shape (= ExtractQueryFeatures の戻り値そのまま)。
+        ///
+        /// timings.extractMs は 0 で返る (skip したため)。
+        /// 戻り値の AudioClip は呼び出し側で再生・破棄。queryFeatures は呼出側所有のまま。
+        /// </summary>
+        public AudioClip Convert(Tensor<float> queryFeatures, float targetWeightAlpha, out ConversionTimings timings)
+        {
+            EnsureInitialized();
+            if (queryFeatures == null) throw new ArgumentNullException(nameof(queryFeatures));
+            if (queryFeatures.shape.rank != 2 || queryFeatures.shape[1] != 1024)
+                throw new ArgumentException(
+                    $"queryFeatures must be (N, 1024), got {queryFeatures.shape}");
+
+            using ProfilerMarker.AutoScope _ = s_TotalMarker.Auto();
+            Stopwatch swTotal = Stopwatch.StartNew();
+
+            // Step 2-5: kNN + vocode + AudioClip 化 (queryFeatures は呼出側所有のまま)
+            AudioClip clip = RunKnnAndVocode(queryFeatures, disposeQuery: false,
+                                             targetWeightAlpha,
+                                             out double knnMs, out double vocodeMs);
+
+            swTotal.Stop();
+
+            timings = new ConversionTimings
+            {
+                extractMs = 0, // skipped (事前トークン化)
+                knnMs     = knnMs,
+                vocodeMs  = vocodeMs,
+                totalMs   = swTotal.Elapsed.TotalMilliseconds,
+            };
+            return clip;
+        }
+
+        /// <summary>
+        /// 共通パス: query features → kNN → vocode → AudioClip 化。
+        /// 呼出元 (Convert(AudioClip,...) と Convert(Tensor,...)) で重複していたため抽出。
+        /// disposeQuery=true なら query 所有権を helper に渡す (内部 Dispose)、
+        /// false なら呼出側がライフタイム管理する想定。
+        /// </summary>
+        AudioClip RunKnnAndVocode(Tensor<float> query, bool disposeQuery, float alpha,
+                                  out double knnMs, out double vocodeMs)
+        {
+            // kNN 段: 合成プール構築 → KnnVcConverter (mergedFeats は using で例外時もリーク防止)
+            Stopwatch swKnn = Stopwatch.StartNew();
+            (Tensor<float> mergedFeatsRaw, float[] mergedWeights) = WeightedPoolBuilder.Build(
+                TargetPool, PlayerPool, alpha);
+            Tensor<float> converted2D;
+            using (mergedFeatsRaw)
+            {
+                converted2D = _converter.Convert(query, mergedFeatsRaw, mergedWeights);
+            }
+            if (disposeQuery) query.Dispose();
+            knnMs = swKnn.Elapsed.TotalMilliseconds;
+
+            // vocode 段: channel-last (1, T_frame, 1024) に reshape → HiFiGAN
             int tFrame = converted2D.shape[0];
             int dim = converted2D.shape[1];
             float[] flat = converted2D.DownloadToArray();
-            using var feats3D = new Tensor<float>(new TensorShape(1, tFrame, dim), flat);
-            float[] audio = _vocoder.VocodeNormalized(feats3D);
+            converted2D.Dispose();
 
-            // Step 5: AudioClip 化
-            var clip = AudioClip.Create("knn_vc_output", audio.Length, 1, k_HiftSampleRate, stream: false);
+            Stopwatch swVocode = Stopwatch.StartNew();
+            float[] audio;
+            using (Tensor<float> feats3D = new Tensor<float>(new TensorShape(1, tFrame, dim), flat))
+            {
+                audio = _vocoder.VocodeNormalized(feats3D);
+            }
+            vocodeMs = swVocode.Elapsed.TotalMilliseconds;
+
+            // AudioClip 化
+            AudioClip clip = AudioClip.Create("knn_vc_output", audio.Length, 1, k_HiftSampleRate, stream: false);
             clip.SetData(audio, 0);
             return clip;
         }
@@ -176,6 +288,17 @@ namespace VoiceHorror.KnnVc
             EnsureInitialized();
             float sim = _judge.ComputeSimilarity(PlayerPool, TargetPool);
             return _judge.Judge(sim);
+        }
+
+        /// <summary>
+        /// TargetPool / PlayerPool の中身をクリアする。永続化ファイルには触らない。
+        /// 量子化比較ランナーで同一 service を別 target で使い回す用途。
+        /// </summary>
+        public void ClearPools()
+        {
+            EnsureInitialized();
+            TargetPool.Clear();
+            PlayerPool.Clear();
         }
 
         /// <summary>
