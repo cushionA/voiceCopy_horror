@@ -1,12 +1,19 @@
-# 2026-05-10 Phase 8 — FP16 量子化比較インフラ整備
+# 2026-05-10 Phase 8 — 量子化 + 事前トークン化スパイク検証
 
 ## 状態
 
 - ブランチ: `feature/phase8-fp16-quantize` (main から派生)
 - 親 PR: #7 `feature/phase8-knnvc-gpu-optim` (Phase A 完全 GPU 化 + プールキャッシュ) — マージ済み
-- 本 PR: 未作成 (本 handoff の commit 後に出す)
-- 状態: ready-for-next-phase / トピック: FP16 ONNX 重み変換 + 比較ランナー導入完了
-- 計測: **未実施** (Editor で VcQuantizeCompare シーンを組み立てる必要あり)
+- 本 PR: **#8** (https://github.com/cushionA/voiceCopy_horror/pull/8)
+- 状態: ready-for-review / トピック: 2 つの最適化スパイクを検証、勝者は事前トークン化
+- **中間結論**: FP16 量子化 → 速度メリットなし (Sentis 設計上の制約)、事前トークン化 → **batch mean -34%、p95 -47%** で大成功
+
+## 結論サマリ (実測ベース)
+
+| アプローチ | 速度 | サイズ | 採用判断 |
+|-----------|------|--------|---------|
+| **FP16 量子化** (onnxconverter_common) | **+5%** (悪化) | -50% (340→170MB) | ❌ Sentis 2.5 は FP16 を真にサポートせず、内部で FP32 upcast。公式 docs で「速度メリットなし」明言済 |
+| **事前トークン化** (固定 source 用) | **-34% (batch mean)** | 純増 (`.npy` 同梱) | ✅ 演出時の少女セリフ変換に投入する価値、Phase 9 で本格統合 |
 
 ## やったこと
 
@@ -42,10 +49,47 @@
 - compile: 0 errors / 2 warnings (UHFPS 既存の `Physics.autoSyncTransforms` deprecation のみ)
 - EditMode test: 48 / 48 PASS (KnnVc アセンブリ全テスト維持)
 
+### B-5. 事前トークン化スパイク (commit `585b210`)
+量子化が振るわなかった一方、**ユーザー提案の「source の事前トークン化」を試したら大当たり**。
+
+#### 実装
+- `VoiceConversionService.ExtractQueryFeatures(AudioClip)`: source を WavLM forward して
+  query features [N, 1024] を返す public API
+- `VoiceConversionService.Convert(Tensor<float>, alpha, out timings)` overload: 事前トークン化
+  された features を入力に取り、WavLM stage を完全 skip。timings.extractMs = 0 で返る
+- `VcPerfRunner.usePretokenizedSource` フラグ: ON で計測前に各 source を WavLM forward → cache
+  (stats から除外)、ConvertClip は cache 経由 Convert を呼ぶ
+- `OnDestroy` で cache `Tensor<float>[]` を全 Dispose
+- CSV header に `# usePretokenizedSource={true|false}` を追記 (両モード CSV 区別用)
+
+#### 計測 (`VcTestOutput/perf_20260510_135417/perf.csv`)
+| 計測 | baseline (live forward) | pretokenized | delta |
+|------|------------------------|--------------|-------|
+| single mean (n=4) | 687.1 ms | 397.5 ms | **−42.1%** |
+| single p95 | 845.4 ms | 445.0 ms | **−47.4%** |
+| batch mean (n=40) | 615.1 ms | 404.5 ms | **−34.2%** |
+| batch p95 | 693.8 ms | 461.4 ms | −33.5% |
+| batch max | 715.1 ms | 465.2 ms | −34.9% |
+
+→ 演出時のセリフ変換が「ボタン押下から 0.4 秒以内」に収まる体感に変わる。
+   variance も pretokenized 側が素直 (WavLM cold/warm 揺らぎ消失)。
+
 ## やっていないこと (次のチケット)
 
-### 1. シーン作成 + 実計測
-- `VcQuantizeCompare.unity` シーンが未作成
+### 1. Phase 9 事前トークン化の本格統合 (本 PR スパイク → 次 PR で実装)
+- `voiceCoppy_test/pretokenize/pretokenize_source.py`: 少女セリフ wav 群を WavLM ONNX で
+  forward して `.npy` 化 (onnxruntime ベース、GPU 利用)
+- `Assets/Audio/PretokenizedFeatures/*.npy` を Addressable group `Audio_PretokenizedFeatures`
+  (label: `pretokenize`, `event-*`) に登録
+- 演出側 (BAD ED 等) で `Addressables.LoadAssetAsync<TextAsset>("cached-features/...")` →
+  NpyReader で features ロード → `service.Convert(features, alpha, out _)`
+- design.md の「事前トークン化パス」セクションに統合タスクを記載済
+
+### 2. VcQuantizeCompare シーン作成 + 実計測 (本 PR には含めない判断)
+- 量子化が Sentis 設計上速度メリットなし → 比較の優先度低下
+- インフラ (`VcQuantizeCompareRunner`) は残しておく (将来 Sentis が native FP16 compute を
+  実装したとき再評価できる)
+- `VcQuantizeCompare.unity` シーンは未作成
 - 必要な手順 (Editor 手作業):
   1. シーンに 2 つの `VoiceConversionService` GameObject を配置:
      - `VcService_FP32`: WavLM/HiFiGAN を `Assets/SentisSpike/Models/KnnVc/*.onnx` (FP32) でアサイン
@@ -64,14 +108,32 @@
 - VcPerfRunner に `ProfilerRecorder` 統合し、`VC.kNN` 単独マーカーを CSV に直接出す改善は本 PR scope 外
 - VcQuantizeCompareRunner 側では **Stopwatch ベースで自前計測**しているので、量子化比較の per-stage 解析には支障なし
 
-## 想定される判断ポイント (実計測後に確認すべきこと)
+## FP16 量子化の最終判断 (実計測後 2026-05-10 追記)
 
-| 観点 | 期待値 | 判断基準 |
-|------|--------|---------|
-| total latency 改善 | FP32 → FP16 で **総時間 -10〜30%** | 改善なしなら GPUCompute backend が FP16 を活かせていない疑い (Sentis profiling で確認) |
-| extract / vocode 個別改善 | extract と vocode は改善、knn は ±5% 以内 | knn は FP32 のまま (KnnVcConverter の graph は FP32 内部) なので変動なしが正常 |
-| time RMSE | < 1e-2 | 0.1 を超えるなら数値発散疑い (LayerNorm 以外を block list 追加) |
-| 聴感品質 | "変わってる" で OK | ユーザー方針: FP16 で品質が "良くなる" ことはない、"変わって/劣化" で正常 |
+実測 (`VcTestOutput/perf_20260510_004401/perf.csv` vs `perf_20260510_004308/perf.csv`):
+
+| 計測 | FP32 baseline | FP16 | delta |
+|------|---------------|------|-------|
+| single mean (n=4) | 687.1 ms | 947.3 ms | **+37.9%** (悪化) |
+| batch mean (n=40) | 615.1 ms | 644.0 ms | +4.7% (悪化) |
+| batch p95 | 693.8 ms | 743.4 ms | +7.2% |
+| Model size | 402 MB | 201 MB | -50% |
+
+**Sentis 2.5 公式 docs で裏取り済**:
+[Quantize a Model | Inference Engine 2.6](https://docs.unity3d.com/Packages/com.unity.ai.inference@2.6/manual/quantize-a-model.html):
+> "At runtime, Inference Engine converts these values back to a higher-precision format
+>  before processing the operations."
+> "A lower bit count per value decreases your model's disk and memory usage **without
+>  significantly affecting inference speed**."
+
+→ Sentis の量子化は重み storage 圧縮のみ、compute は常に FP32。`onnxconverter_common` で
+  挿入された 84 個の Cast (boundary + LN) が dequantize overhead として +5% 計上され、
+  メモリ帯域削減効果を上回って **純損失**。
+
+**判断**:
+- 量子化は voice_horror では採用せず (RTX 2070S 8GB に対し VRAM 余裕十分、size 削減動機薄)
+- 公式 `ModelQuantizer.QuantizeWeights(QuantizationType.Float16, ref model)` を Editor で
+  呼べば Cast 配置がより最適化される可能性は残るが、「速度改善はない」のは公式明言済 → 着手保留
 
 ## 関連
 

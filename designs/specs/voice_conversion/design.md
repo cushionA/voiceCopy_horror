@@ -223,6 +223,22 @@ public class VoiceConversionService : MonoBehaviour, IDisposable
     /// 内部で WeightedPoolBuilder.Build(TargetPool, PlayerPool, alpha) を使用
     public AudioClip Convert(AudioClip source, float targetWeightAlpha = 1.0f);
 
+    /// 変換 + per-stage timings 内訳取得 (extract / knn / vocode / total)。
+    /// 量子化比較ランナーや perf 計測の細粒度分析用。
+    public AudioClip Convert(AudioClip source, float targetWeightAlpha, out ConversionTimings timings);
+
+    /// 事前トークン化用: source AudioClip を WavLM forward して
+    /// query features [N, 1024] を返す (戻り値は呼出側 Dispose 責務)。
+    /// 配布時に固定の少女セリフ等を起動時/Addressable ロード時にここで一括 tokenize し、
+    /// 演出時の Convert は下の Tensor 入力 overload に切り替える設計。
+    public Tensor<float> ExtractQueryFeatures(AudioClip source);
+
+    /// 事前トークン化された query features を入力に取り、WavLM forward を skip して変換。
+    /// timings.extractMs は 0 で返る。
+    /// 効果実測: batch mean -34% (615ms → 405ms)、p95 -47%
+    /// (Phase 8 PR #8 計測、VcTestOutput/perf_20260510_135417/perf.csv)
+    public AudioClip Convert(Tensor<float> queryFeatures, float targetWeightAlpha, out ConversionTimings timings);
+
     /// ED 判定 (B-3 SS-002)
     public SpeakerSimilarityJudge.Verdict JudgeEnding();
 
@@ -272,6 +288,59 @@ public class VoiceConversionService : MonoBehaviour, IDisposable
 | **合計 (1 秒変換)** | **~35-45ms** (RTF 0.04) |
 
 ストリーミング不要、非ストリーミング (録音→全変換→再生) で十分。
+
+## 事前トークン化パス (Phase 8 PR #8 で導入)
+
+### 動機
+
+ナラティブ演出 (BAD ED で「混ざっていく」) で使う source 音声 (少女セリフ) は
+配布時点で **固定**。プレイヤー録音は逆に実時間 forward 必要だが、source 側は
+事前に WavLM Layer 6 features を計算して `.npy` として同梱できる。
+
+### パイプライン分岐
+
+```
+[player 録音 → Pool 蓄積]
+   AudioClip → WavLM(forward) → 1024-dim features → MatchingSetPool.Append
+                ↑ 実時間で必須
+
+[ナラティブ演出: 固定 source 変換]
+   AudioClip ─┬─ WavLM(forward) ─┐
+              │   ↑ 既存パス     ├─→ Convert (kNN + HiFiGAN)
+   .npy ──────┴─ NpyReader ──────┘
+                ↑ 事前トークン化パス (本 PR で追加)
+```
+
+### 配布物
+
+- 少女セリフ N 本 → 各 `~6 MB / 30 秒` の `.npy` (FP32 features)
+- FP16 で保存すれば半分 (~3 MB / 30 秒)
+- Addressable group: `Audio_PretokenizedFeatures` (label: `pretokenize`, `event-*`)
+
+### 計測実績 (PR #8、`VcPerfRunner.usePretokenizedSource=true`)
+
+| 計測 | baseline (live forward) | pretokenized | delta |
+|------|------------------------|--------------|-------|
+| batch mean (n=40) | 615.1 ms | **404.5 ms** | **−34.2%** |
+| batch p95 | 693.8 ms | 461.4 ms | −33.5% |
+| single p95 | 845.4 ms | 445.0 ms | **−47.4%** |
+
+→ 演出時のセリフ変換が「ボタン押下から 0.4 秒以内」に収まる体感に変わる。
+   FP16 量子化が Sentis では失敗 (+5%) した一方、こちらは大成功。
+
+### 制約
+
+- 事前トークン化できるのは **source 側のみ**。プレイヤー録音は実時間 forward 必須
+- → WavLM ONNX (340 MB) は引き続きランタイムロード必要
+- → 純粋なファイルサイズ削減効果はなし、**速度改善のみ**
+
+### Phase 9 統合タスク (本 PR scope 外)
+
+- Python スクリプト `voiceCoppy_test/pretokenize/pretokenize_source.py` で
+  少女セリフ wav 群を `.npy` 化 (onnxruntime + WavLM ONNX で forward)
+- `Assets/Audio/PretokenizedFeatures/*.npy` を Addressable 登録
+- 演出側 (BAD ED 等) の API: `service.Convert(loadedFeatures, alpha, out _)`
+- `MatchingSetPool.LoadFrom` の NpyReader を query features 用にも reuse
 
 ## Architect 整合性チェック
 
