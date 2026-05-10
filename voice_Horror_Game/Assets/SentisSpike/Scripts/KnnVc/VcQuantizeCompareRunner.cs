@@ -35,6 +35,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using Unity.InferenceEngine;
 using UnityEngine;
 using VoiceHorror.VC; // WavWriter
 
@@ -140,13 +141,23 @@ namespace VoiceHorror.KnnVc
             {
                 if (testClips[t] == null) continue;
 
-                // target ごとに pool を再構築 (FP32 / FP16 個別)
-                _statusLine = $"Building target pool: {testClips[t].name}";
+                // target pool を **共通 features** で再構築。
+                // 旧実装は両 service で個別に WavLM forward を走らせていたため、
+                // FP32/FP16 で target encode の数値差が混入していた。
+                // 比較したいのは「convert 時の query encode + vocode 差分」なので、
+                // FP32 service で 1 回 forward して両 service の TargetPool に
+                // 同じ features を append することで target 側の差分を排除する。
+                _statusLine = $"Building target pool (shared features): {testClips[t].name}";
                 yield return null;
                 serviceFp32.ClearPools();
                 serviceFp16.ClearPools();
-                serviceFp32.AccumulateTargetVoice(testClips[t]);
-                serviceFp16.AccumulateTargetVoice(testClips[t]);
+                using (Tensor<float> targetFeats2D = serviceFp32.ExtractQueryFeatures(testClips[t]))
+                {
+                    // ExtractQueryFeatures は (T, 1024)。MatchingSetPool.Append は
+                    // (N, 1024) を期待 (rank 2、最終 dim 1024) なのでそのまま渡せる。
+                    serviceFp32.TargetPool.Append(targetFeats2D);
+                    serviceFp16.TargetPool.Append(targetFeats2D);
+                }
 
                 for (int s = 0; s < testClips.Length; s++)
                 {
@@ -199,40 +210,13 @@ namespace VoiceHorror.KnnVc
                 return null;
             }
 
-            // メトリクス計算 (短い方の長さで比較。長さが違う場合の差分は length 列に表れる)
-            int n = Math.Min(audioFp32.Length, audioFp16.Length);
-            double sumSq = 0;
-            double maxAbs = 0;
-            double peak32 = 0;
-            double peak16 = 0;
-            for (int i = 0; i < n; i++)
-            {
-                double d = (double)audioFp32[i] - audioFp16[i];
-                sumSq += d * d;
-                double ad = d >= 0 ? d : -d;
-                if (ad > maxAbs) maxAbs = ad;
-                double p32 = audioFp32[i] >= 0 ? audioFp32[i] : -audioFp32[i];
-                double p16 = audioFp16[i] >= 0 ? audioFp16[i] : -audioFp16[i];
-                if (p32 > peak32) peak32 = p32;
-                if (p16 > peak16) peak16 = p16;
-            }
-            // 長さが違う部分は片方のみのエネルギーが残る — peak 集計だけ反映
-            for (int i = n; i < audioFp32.Length; i++)
-            {
-                double p32 = audioFp32[i] >= 0 ? audioFp32[i] : -audioFp32[i];
-                if (p32 > peak32) peak32 = p32;
-            }
-            for (int i = n; i < audioFp16.Length; i++)
-            {
-                double p16 = audioFp16[i] >= 0 ? audioFp16[i] : -audioFp16[i];
-                if (p16 > peak16) peak16 = p16;
-            }
-            double rmse = n > 0 ? Math.Sqrt(sumSq / n) : 0;
+            // メトリクス計算 (純関数、テスト容易性のため static helper に分離)
+            WaveformMetrics m = ComputeWaveformMetrics(audioFp32, audioFp16);
 
             // WAV 出力
             if (!dryRunNoOutput)
             {
-                SaveOutputs(src.name, tgt.name, audioFp32, audioFp16, n);
+                SaveOutputs(src.name, tgt.name, audioFp32, audioFp16, m.compareLen);
             }
 
             return new PairResult
@@ -241,13 +225,72 @@ namespace VoiceHorror.KnnVc
                 tgtName = tgt.name,
                 audioLenFp32 = audioFp32.Length,
                 audioLenFp16 = audioFp16.Length,
-                timeRmse = rmse,
-                timeMaxAbsDiff = maxAbs,
-                peakFp32 = peak32,
-                peakFp16 = peak16,
+                timeRmse = m.rmse,
+                timeMaxAbsDiff = m.maxAbsDiff,
+                peakFp32 = m.peakA,
+                peakFp16 = m.peakB,
                 timingsFp32 = tFp32,
                 timingsFp16 = tFp16,
             };
+        }
+
+        /// <summary>
+        /// 2 つの mono PCM 波形の比較メトリクス。純関数 (static + 副作用なし) で EditMode テスト容易。
+        /// 長さが違う場合は **短い方の長さで RMSE / maxAbsDiff を計算**、peak は両方の全長から集計。
+        /// </summary>
+        public struct WaveformMetrics
+        {
+            public int compareLen;     // RMSE / maxAbsDiff 計算に使った長さ = min(a.Length, b.Length)
+            public double rmse;        // sqrt(mean((a[i] - b[i])^2)) over compareLen
+            public double maxAbsDiff;  // max(|a[i] - b[i]|) over compareLen
+            public double peakA;       // max(|a[i]|) over a.Length 全体
+            public double peakB;       // max(|b[i]|) over b.Length 全体
+        }
+
+        /// <summary>
+        /// FP32 vs FP16 等の波形比較で使う metrics を計算する。
+        /// null / 空配列でも例外を投げず compareLen=0、rmse=0、peak=0 を返す。
+        /// </summary>
+        public static WaveformMetrics ComputeWaveformMetrics(float[] a, float[] b)
+        {
+            WaveformMetrics m = default;
+            if (a == null || b == null) return m;
+
+            int n = Math.Min(a.Length, b.Length);
+            m.compareLen = n;
+
+            double sumSq = 0;
+            double maxAbs = 0;
+            double peakA = 0;
+            double peakB = 0;
+            for (int i = 0; i < n; i++)
+            {
+                double d = (double)a[i] - b[i];
+                sumSq += d * d;
+                double ad = d >= 0 ? d : -d;
+                if (ad > maxAbs) maxAbs = ad;
+                double pa = a[i] >= 0 ? a[i] : -a[i];
+                double pb = b[i] >= 0 ? b[i] : -b[i];
+                if (pa > peakA) peakA = pa;
+                if (pb > peakB) peakB = pb;
+            }
+            // 長さが違う部分は peak 集計のみ更新
+            for (int i = n; i < a.Length; i++)
+            {
+                double pa = a[i] >= 0 ? a[i] : -a[i];
+                if (pa > peakA) peakA = pa;
+            }
+            for (int i = n; i < b.Length; i++)
+            {
+                double pb = b[i] >= 0 ? b[i] : -b[i];
+                if (pb > peakB) peakB = pb;
+            }
+
+            m.rmse = n > 0 ? Math.Sqrt(sumSq / n) : 0;
+            m.maxAbsDiff = maxAbs;
+            m.peakA = peakA;
+            m.peakB = peakB;
+            return m;
         }
 
         const int k_OutputSampleRate = 16000;

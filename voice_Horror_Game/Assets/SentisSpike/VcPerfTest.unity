@@ -514,7 +514,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: cb97ea6ee281e00409ce602357009c60, type: 3}
   m_Name: 
   m_EditorClassIdentifier: voice_horror.Sentis::VoiceHorror.KnnVc.VcPerfRunner
-  service: {fileID: 1397923771}
+  service: {fileID: 669592026}
   targetClip: {fileID: 8300000, guid: daeb77a1290166a4aa19a1ecb4812cff, type: 3}
   sources:
   - {fileID: 8300000, guid: aae84cb22211a4f47b1093d38d64dbc6, type: 3}
@@ -524,6 +524,7 @@ MonoBehaviour:
   batchIterations: 10
   saveSinglePassWavs: 1
   alpha: 1
+  usePretokenizedSource: 1
 --- !u!4 &1614906976
 Transform:
   m_ObjectHideFlags: 0

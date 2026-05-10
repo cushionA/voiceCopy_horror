@@ -8,10 +8,14 @@ export_fp16.py — kNN-VC ONNX (WavLM + HiFiGAN) を FP16 weight に変換する
     これにより C# 側 (WavLMFeatureExtractor / HiFiGANVocoder) のコード変更不要で
     ModelAsset の差し替えだけで FP16 推論が走る。
 
-Sentis 2.5 互換性メモ:
-    - Sentis は ONNX の FP16 weight を内部で扱える (GPUCompute backend で実速度向上)
+Sentis 2.5 互換性メモ (2026-05-10 検証結果):
+    - Sentis は ONNX の FP16 weight をロードできるが、compute は常に FP32 に upcast される
+      (公式 docs: https://docs.unity3d.com/Packages/com.unity.ai.inference@2.6/manual/quantize-a-model.html)
+    - 結果: weight storage は -50% 削減できるが、推論速度は dequantize overhead で
+      むしろ +5% 悪化する (PR #8 で実測)
     - 入出力 boundary に float→float16 / float16→float Cast が自動挿入される
     - shape inference 不要 (元 FP32 ONNX で確定済み)
+    - **採用は VRAM 予算が逼迫したときのみ**。詳細は README.md の警告参照。
 
 依存:
     pip install onnx onnxconverter_common numpy

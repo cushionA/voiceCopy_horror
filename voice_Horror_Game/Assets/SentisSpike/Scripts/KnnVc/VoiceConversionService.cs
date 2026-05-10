@@ -172,46 +172,20 @@ namespace VoiceHorror.KnnVc
             Tensor<float> query2D = ExtractQuery2D(source);
             swExtract.Stop();
 
-            // Step 2 + 3: 合成プール + kNN 変換
-            // (mergedFeats の alloc は微小なので knn ステージに含めて計測)
-            Stopwatch swKnn = Stopwatch.StartNew();
-            (Tensor<float> mergedFeatsRaw, float[] mergedWeights) = WeightedPoolBuilder.Build(
-                TargetPool, PlayerPool, targetWeightAlpha);
-            Tensor<float> converted2D;
-            using (mergedFeatsRaw)
-            {
-                converted2D = _converter.Convert(query2D, mergedFeatsRaw, mergedWeights);
-            }
-            query2D.Dispose();
-            swKnn.Stop();
-
-            // Step 4: HiFiGAN vocode (channel-last (1, T_frame, 1024) に reshape)
-            int tFrame = converted2D.shape[0];
-            int dim = converted2D.shape[1];
-            float[] flat = converted2D.DownloadToArray();
-            converted2D.Dispose();
-
-            Stopwatch swVocode = Stopwatch.StartNew();
-            float[] audio;
-            using (Tensor<float> feats3D = new Tensor<float>(new TensorShape(1, tFrame, dim), flat))
-            {
-                audio = _vocoder.VocodeNormalized(feats3D);
-            }
-            swVocode.Stop();
+            // Step 2-5: kNN + vocode + AudioClip 化 (query2D の所有権を helper に渡す)
+            AudioClip clip = RunKnnAndVocode(query2D, disposeQuery: true,
+                                             targetWeightAlpha,
+                                             out double knnMs, out double vocodeMs);
 
             swTotal.Stop();
 
             timings = new ConversionTimings
             {
                 extractMs = swExtract.Elapsed.TotalMilliseconds,
-                knnMs     = swKnn.Elapsed.TotalMilliseconds,
-                vocodeMs  = swVocode.Elapsed.TotalMilliseconds,
+                knnMs     = knnMs,
+                vocodeMs  = vocodeMs,
                 totalMs   = swTotal.Elapsed.TotalMilliseconds,
             };
-
-            // Step 5: AudioClip 化
-            AudioClip clip = AudioClip.Create("knn_vc_output", audio.Length, 1, k_HiftSampleRate, stream: false);
-            clip.SetData(audio, 0);
             return clip;
         }
 
@@ -248,18 +222,45 @@ namespace VoiceHorror.KnnVc
             using ProfilerMarker.AutoScope _ = s_TotalMarker.Auto();
             Stopwatch swTotal = Stopwatch.StartNew();
 
-            // Step 2 + 3: 合成プール + kNN 変換 (Step 1 の WavLM は skip)
+            // Step 2-5: kNN + vocode + AudioClip 化 (queryFeatures は呼出側所有のまま)
+            AudioClip clip = RunKnnAndVocode(queryFeatures, disposeQuery: false,
+                                             targetWeightAlpha,
+                                             out double knnMs, out double vocodeMs);
+
+            swTotal.Stop();
+
+            timings = new ConversionTimings
+            {
+                extractMs = 0, // skipped (事前トークン化)
+                knnMs     = knnMs,
+                vocodeMs  = vocodeMs,
+                totalMs   = swTotal.Elapsed.TotalMilliseconds,
+            };
+            return clip;
+        }
+
+        /// <summary>
+        /// 共通パス: query features → kNN → vocode → AudioClip 化。
+        /// 呼出元 (Convert(AudioClip,...) と Convert(Tensor,...)) で重複していたため抽出。
+        /// disposeQuery=true なら query 所有権を helper に渡す (内部 Dispose)、
+        /// false なら呼出側がライフタイム管理する想定。
+        /// </summary>
+        AudioClip RunKnnAndVocode(Tensor<float> query, bool disposeQuery, float alpha,
+                                  out double knnMs, out double vocodeMs)
+        {
+            // kNN 段: 合成プール構築 → KnnVcConverter (mergedFeats は using で例外時もリーク防止)
             Stopwatch swKnn = Stopwatch.StartNew();
             (Tensor<float> mergedFeatsRaw, float[] mergedWeights) = WeightedPoolBuilder.Build(
-                TargetPool, PlayerPool, targetWeightAlpha);
+                TargetPool, PlayerPool, alpha);
             Tensor<float> converted2D;
             using (mergedFeatsRaw)
             {
-                converted2D = _converter.Convert(queryFeatures, mergedFeatsRaw, mergedWeights);
+                converted2D = _converter.Convert(query, mergedFeatsRaw, mergedWeights);
             }
-            swKnn.Stop();
+            if (disposeQuery) query.Dispose();
+            knnMs = swKnn.Elapsed.TotalMilliseconds;
 
-            // Step 4: HiFiGAN vocode
+            // vocode 段: channel-last (1, T_frame, 1024) に reshape → HiFiGAN
             int tFrame = converted2D.shape[0];
             int dim = converted2D.shape[1];
             float[] flat = converted2D.DownloadToArray();
@@ -271,19 +272,9 @@ namespace VoiceHorror.KnnVc
             {
                 audio = _vocoder.VocodeNormalized(feats3D);
             }
-            swVocode.Stop();
+            vocodeMs = swVocode.Elapsed.TotalMilliseconds;
 
-            swTotal.Stop();
-
-            timings = new ConversionTimings
-            {
-                extractMs = 0, // skipped (事前トークン化)
-                knnMs     = swKnn.Elapsed.TotalMilliseconds,
-                vocodeMs  = swVocode.Elapsed.TotalMilliseconds,
-                totalMs   = swTotal.Elapsed.TotalMilliseconds,
-            };
-
-            // Step 5: AudioClip 化
+            // AudioClip 化
             AudioClip clip = AudioClip.Create("knn_vc_output", audio.Length, 1, k_HiftSampleRate, stream: false);
             clip.SetData(audio, 0);
             return clip;

@@ -63,13 +63,24 @@
 - CSV header に `# usePretokenizedSource={true|false}` を追記 (両モード CSV 区別用)
 
 #### 計測 (`VcTestOutput/perf_20260510_135417/perf.csv`)
-| 計測 | baseline (live forward) | pretokenized | delta |
-|------|------------------------|--------------|-------|
+
+⚠ **注意**: 最新計測時 (`perf_20260510_135417`) は VcPerfTest シーンの
+`VcPerfRunner.service` フィールドが **FP16 service にすり替わっていた**
+(VcQuantizeCompareRunner 検証用に追加した GameObject に切替済)。
+つまり以下の delta は厳密には `(FP32 + live forward) → (FP16 + pretokenized)` の混合差分。
+
+| 計測 | baseline (FP32 + live) | FP16 + pretokenized | delta |
+|------|------------------------|---------------------|-------|
 | single mean (n=4) | 687.1 ms | 397.5 ms | **−42.1%** |
 | single p95 | 845.4 ms | 445.0 ms | **−47.4%** |
 | batch mean (n=40) | 615.1 ms | 404.5 ms | **−34.2%** |
 | batch p95 | 693.8 ms | 461.4 ms | −33.5% |
 | batch max | 715.1 ms | 465.2 ms | −34.9% |
+
+ただし WavLM forward が完全 skip されている前提なので、**FP16 weight の dequantize
+overhead は HiFiGAN vocode 段にしか効かない** (kNN は FP32 graph、extract は cache)。
+HiFiGAN の overhead は実測で +0〜10ms 程度なので、純粋な「FP32 + pretokenized」も
+ほぼ同じ ~400ms に収まると推定。pretokenize 単独効果の取り直しは Phase 9 統合時に実施。
 
 → 演出時のセリフ変換が「ボタン押下から 0.4 秒以内」に収まる体感に変わる。
    variance も pretokenized 側が素直 (WavLM cold/warm 揺らぎ消失)。

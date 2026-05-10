@@ -297,6 +297,67 @@ namespace VoiceHorror.KnnVc.Tests.EditMode
             for (int i = 5; i < 8; i++) Assert.AreEqual(0.2f, w[i], 1e-6f, $"w[{i}] 新 frame");
         }
 
+        // ── B-7: Clear (Phase 8 PR #8 で追加された API) ────────────────────
+
+        [Test]
+        public void B7_Clear_RemovesAllFrames()
+        {
+            var pool = new MatchingSetPool("test");
+            using var t = MakeRandomFeatures(10, 1024, seed: 1);
+            pool.Append(t, weight: 0.5f);
+            Assert.AreEqual(10, pool.FrameCount, "pre-clear");
+
+            pool.Clear();
+
+            Assert.AreEqual(0, pool.FrameCount, "post-clear FrameCount");
+            Assert.AreEqual(0f, pool.Coverage5MinRatio, "post-clear coverage");
+            Assert.AreEqual(0, pool.GetWeights().Length, "post-clear weights length");
+            Assert.AreEqual(0, pool.AsReadOnlyFlatSpan().Length, "post-clear flat span length");
+        }
+
+        [Test]
+        public void B7b_Clear_AllowsAppendAfter()
+        {
+            var pool = new MatchingSetPool("test");
+            using var first = MakeRandomFeatures(5, 1024, seed: 2);
+            pool.Append(first, weight: 0.7f);
+            pool.Clear();
+
+            using var second = MakeRandomFeatures(3, 1024, seed: 3);
+            pool.Append(second, weight: 0.2f);
+
+            Assert.AreEqual(3, pool.FrameCount, "Clear 後の Append は Frame 0 から再カウント");
+            float[] w = pool.GetWeights();
+            for (int i = 0; i < 3; i++)
+                Assert.AreEqual(0.2f, w[i], 1e-6f, $"w[{i}] should be the second-append weight only");
+        }
+
+        [Test]
+        public void B7c_Clear_OnEmptyPool_NoOp()
+        {
+            var pool = new MatchingSetPool("test");
+
+            // 例外を投げないこと
+            pool.Clear();
+            pool.Clear();
+
+            Assert.AreEqual(0, pool.FrameCount);
+        }
+
+        [Test]
+        public void B7d_Clear_ThenSpan_ReturnsEmpty()
+        {
+            var pool = new MatchingSetPool("test");
+            using var t = MakeRandomFeatures(7, 1024, seed: 4);
+            pool.Append(t);
+
+            pool.Clear();
+
+            // Span は (内部 cache 配列が再利用されていても) length 0 を返さなければならない
+            Assert.AreEqual(0, pool.AsReadOnlyFlatSpan().Length);
+            Assert.AreEqual(0, pool.AsReadOnlyWeightsSpan().Length);
+        }
+
         // ── Helpers ───────────────────────────────────────────────────
 
         static Tensor<float> MakeRandomFeatures(int n, int dim, int seed)
