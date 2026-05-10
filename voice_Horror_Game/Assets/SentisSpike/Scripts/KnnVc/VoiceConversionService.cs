@@ -216,6 +216,80 @@ namespace VoiceHorror.KnnVc
         }
 
         /// <summary>
+        /// 事前トークン化用: source AudioClip を WavLM forward して query features [N, 1024] を返す。
+        /// 配布時に固定の source (少女セリフ等) を起動時/ゲームロード時にここで一括 tokenize し、
+        /// 演出時の Convert は <see cref="Convert(Tensor{float},float,out ConversionTimings)"/>
+        /// に切り替えれば WavLM forward ステージ (~250ms) を完全省略できる。
+        ///
+        /// 戻り値の Tensor は呼び出し側で Dispose する責任 (キャッシュ寿命に応じて保持)。
+        /// </summary>
+        public Tensor<float> ExtractQueryFeatures(AudioClip source)
+        {
+            EnsureInitialized();
+            if (source == null) throw new ArgumentNullException(nameof(source));
+            return ExtractQuery2D(source);
+        }
+
+        /// <summary>
+        /// 事前トークン化された query features を入力に取り、WavLM forward を skip して変換する。
+        /// 入力 features は (N, 1024) shape (= ExtractQueryFeatures の戻り値そのまま)。
+        ///
+        /// timings.extractMs は 0 で返る (skip したため)。
+        /// 戻り値の AudioClip は呼び出し側で再生・破棄。queryFeatures は呼出側所有のまま。
+        /// </summary>
+        public AudioClip Convert(Tensor<float> queryFeatures, float targetWeightAlpha, out ConversionTimings timings)
+        {
+            EnsureInitialized();
+            if (queryFeatures == null) throw new ArgumentNullException(nameof(queryFeatures));
+            if (queryFeatures.shape.rank != 2 || queryFeatures.shape[1] != 1024)
+                throw new ArgumentException(
+                    $"queryFeatures must be (N, 1024), got {queryFeatures.shape}");
+
+            using ProfilerMarker.AutoScope _ = s_TotalMarker.Auto();
+            Stopwatch swTotal = Stopwatch.StartNew();
+
+            // Step 2 + 3: 合成プール + kNN 変換 (Step 1 の WavLM は skip)
+            Stopwatch swKnn = Stopwatch.StartNew();
+            (Tensor<float> mergedFeatsRaw, float[] mergedWeights) = WeightedPoolBuilder.Build(
+                TargetPool, PlayerPool, targetWeightAlpha);
+            Tensor<float> converted2D;
+            using (mergedFeatsRaw)
+            {
+                converted2D = _converter.Convert(queryFeatures, mergedFeatsRaw, mergedWeights);
+            }
+            swKnn.Stop();
+
+            // Step 4: HiFiGAN vocode
+            int tFrame = converted2D.shape[0];
+            int dim = converted2D.shape[1];
+            float[] flat = converted2D.DownloadToArray();
+            converted2D.Dispose();
+
+            Stopwatch swVocode = Stopwatch.StartNew();
+            float[] audio;
+            using (Tensor<float> feats3D = new Tensor<float>(new TensorShape(1, tFrame, dim), flat))
+            {
+                audio = _vocoder.VocodeNormalized(feats3D);
+            }
+            swVocode.Stop();
+
+            swTotal.Stop();
+
+            timings = new ConversionTimings
+            {
+                extractMs = 0, // skipped (事前トークン化)
+                knnMs     = swKnn.Elapsed.TotalMilliseconds,
+                vocodeMs  = swVocode.Elapsed.TotalMilliseconds,
+                totalMs   = swTotal.Elapsed.TotalMilliseconds,
+            };
+
+            // Step 5: AudioClip 化
+            AudioClip clip = AudioClip.Create("knn_vc_output", audio.Length, 1, k_HiftSampleRate, stream: false);
+            clip.SetData(audio, 0);
+            return clip;
+        }
+
+        /// <summary>
         /// PlayerPool と TargetPool の話者類似度から ED 判定。
         /// </summary>
         public SpeakerSimilarityJudge.Verdict JudgeEnding()

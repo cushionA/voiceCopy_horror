@@ -24,6 +24,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using Unity.InferenceEngine;
 using Unity.Profiling;
 using UnityEngine;
 using VoiceHorror.VC;
@@ -55,6 +56,12 @@ namespace VoiceHorror.KnnVc
         [Tooltip("変換 alpha (1.0 = target only)")]
         [Range(0f, 1f)]
         [SerializeField] float alpha = 1.0f;
+
+        [Header("Pretokenize")]
+        [Tooltip("ON: 計測前に各 source を WavLM forward → features をキャッシュ。" +
+                 "Convert 時は WavLM ステージ (~250ms) を skip して kNN + HiFiGAN だけ計測する。" +
+                 "ナラティブ演出 (固定 source) のレイテンシ評価用。")]
+        [SerializeField] bool usePretokenizedSource = false;
 
         // ── Stats ───────────────────────────────────────────────────────
         struct StageStats
@@ -101,6 +108,10 @@ namespace VoiceHorror.KnnVc
 
         string _statusLine = "(initializing)";
 
+        // 事前トークン化キャッシュ。usePretokenizedSource = true のときのみ生成。
+        // 各 source[i] に対応する query features [N, 1024]。OnDestroy で全 Dispose。
+        Tensor<float>[] _cachedQueryFeatures;
+
         // ── Lifecycle ───────────────────────────────────────────────────
 
         IEnumerator Start()
@@ -136,21 +147,41 @@ namespace VoiceHorror.KnnVc
             swPool.Stop();
             Debug.Log($"[VcPerfRunner] TargetPool built: {service.TargetPool.FrameCount} frames in {swPool.ElapsedMilliseconds}ms");
 
+            // 事前トークン化 (フラグ ON のときのみ実行、stats には含めない)
+            if (usePretokenizedSource)
+            {
+                _statusLine = "Pretokenizing sources (WavLM forward, stats 除外)...";
+                yield return null;
+                var swPre = Stopwatch.StartNew();
+                _cachedQueryFeatures = new Tensor<float>[sources.Length];
+                int preCount = 0;
+                for (int i = 0; i < sources.Length; i++)
+                {
+                    if (sources[i] == null) continue;
+                    _cachedQueryFeatures[i] = service.ExtractQueryFeatures(sources[i]);
+                    preCount++;
+                    yield return null;
+                }
+                swPre.Stop();
+                Debug.Log($"[VcPerfRunner] Pretokenized {preCount} sources in {swPre.ElapsedMilliseconds}ms " +
+                          "(以降 Convert は WavLM forward を skip)");
+            }
+
             yield return RunFullSequence();
         }
 
         IEnumerator RunFullSequence()
         {
             // (a) Warmup conversion: kNN/vocode 経路の cold start を吸収。stats には記録しない。
-            AudioClip firstSource = FindFirstNonNull();
-            if (firstSource == null)
+            int firstIdx = FindFirstNonNullIndex();
+            if (firstIdx < 0)
             {
                 _statusLine = "ERROR: no non-null sources";
                 yield break;
             }
-            _statusLine = $"Warmup convert (discarded): {firstSource.name}";
+            _statusLine = $"Warmup convert (discarded): {sources[firstIdx].name}";
             yield return null;
-            ConvertClip(firstSource, recordTo: null, saveWavTo: null);
+            ConvertClip(firstIdx, recordTo: null, saveWavTo: null);
             yield return null;
 
             // (b) Single pass: 各 source × 1 (試聴用 WAV も保存)
@@ -163,7 +194,7 @@ namespace VoiceHorror.KnnVc
                 string wavPath = saveSinglePassWavs
                     ? BuildOutputWavPath(sources[i].name, singleCount)
                     : null;
-                ConvertClip(sources[i], recordTo: SingleRef, saveWavTo: wavPath);
+                ConvertClip(i, recordTo: SingleRef, saveWavTo: wavPath);
                 singleCount++;
                 yield return null;
             }
@@ -178,7 +209,7 @@ namespace VoiceHorror.KnnVc
                     if (sources[i] == null) continue;
                     run++;
                     _statusLine = $"Batch [{run}/{total}]: {sources[i].name} (iter {iter + 1}/{batchIterations})";
-                    ConvertClip(sources[i], recordTo: BatchRef, saveWavTo: null);
+                    ConvertClip(i, recordTo: BatchRef, saveWavTo: null);
                     yield return null;
                 }
             }
@@ -200,11 +231,11 @@ namespace VoiceHorror.KnnVc
         void SingleRef(double ms) => _single.Record(ms);
         void BatchRef(double ms)  => _batch.Record(ms);
 
-        AudioClip FindFirstNonNull()
+        int FindFirstNonNullIndex()
         {
             for (int i = 0; i < sources.Length; i++)
-                if (sources[i] != null) return sources[i];
-            return null;
+                if (sources[i] != null) return i;
+            return -1;
         }
 
         int NonNullSourceCount()
@@ -228,13 +259,27 @@ namespace VoiceHorror.KnnVc
             return Path.Combine(outDir, $"single_{idx:D2}_{sourceName}.wav");
         }
 
-        void ConvertClip(AudioClip clip, StatsRef recordTo, string saveWavTo)
+        void ConvertClip(int srcIdx, StatsRef recordTo, string saveWavTo)
         {
+            AudioClip clip = sources[srcIdx];
             var sw = Stopwatch.StartNew();
             AudioClip outClip = null;
             try
             {
-                outClip = service.Convert(clip, alpha);
+                if (usePretokenizedSource)
+                {
+                    Tensor<float> cached = _cachedQueryFeatures[srcIdx];
+                    if (cached == null)
+                    {
+                        Debug.LogError($"[VcPerfRunner] pretokenized cache missing for src idx {srcIdx} ({clip.name})");
+                        return;
+                    }
+                    outClip = service.Convert(cached, alpha, out _);
+                }
+                else
+                {
+                    outClip = service.Convert(clip, alpha);
+                }
             }
             catch (System.Exception ex)
             {
@@ -278,6 +323,7 @@ namespace VoiceHorror.KnnVc
 
             var sb = new StringBuilder();
             sb.AppendLine("# kNN-VC Perf Runner — total elapsed only (per-stage breakdown via Profiler ProfilerMarker)");
+            sb.AppendLine($"# usePretokenizedSource={usePretokenizedSource} (true なら WavLM forward は計測対象外、cache 使用)");
             sb.AppendLine("stage,count,mean_ms,min_ms,max_ms,p95_ms");
             sb.AppendLine($"single,{_single.count},{_single.MeanMs:F2},{_single.minMs:F2},{_single.maxMs:F2},{_single.P95Ms:F2}");
             sb.AppendLine($"batch,{_batch.count},{_batch.MeanMs:F2},{_batch.minMs:F2},{_batch.maxMs:F2},{_batch.P95Ms:F2}");
@@ -288,6 +334,17 @@ namespace VoiceHorror.KnnVc
 
             File.WriteAllText(path, sb.ToString());
             return path;
+        }
+
+        void OnDestroy()
+        {
+            if (_cachedQueryFeatures == null) return;
+            for (int i = 0; i < _cachedQueryFeatures.Length; i++)
+            {
+                _cachedQueryFeatures[i]?.Dispose();
+                _cachedQueryFeatures[i] = null;
+            }
+            _cachedQueryFeatures = null;
         }
 
         // ── IMGUI 表示 ───────────────────────────────────────────────────
